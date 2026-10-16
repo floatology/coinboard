@@ -151,7 +151,7 @@ function chart(el, series, o={}){
     const rows=series.map(s=>{ let b=null; for(const p of s.pts){ if(b==null||Math.abs(p[0]-t)<Math.abs(b[0]-t)) b=p; } return [s,b]; }).filter(x=>x[1]&&x[1][1]!=null);
     if(!rows.length) return; const tt=rows[0][1][0]; cur.setAttribute("x1",X(tt)); cur.setAttribute("x2",X(tt)); cur.style.display="";
     tip.innerHTML=`<b>${new Date(tt*1000).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</b><br>`+rows.map(([s,p])=>`<span style="color:${s.color}">●</span> ${s.name}: ${(o.fmt||short)(p[1])}`).join("<br>");
-    tipY=scrollY; tip.style.display="block"; tip.style.left=Math.min(cx+12,innerWidth-170)+"px"; tip.style.top=(ev.touches?ev.touches[0].clientY:ev.clientY)-60+"px"; };
+    tipY=scrollY; tip.style.display="block"; const tw=tip.offsetWidth; tip.style.left=Math.max(6,(cx+12+tw<innerWidth-6)?cx+12:cx-tw-12)+"px"; tip.style.top=(ev.touches?ev.touches[0].clientY:ev.clientY)-60+"px"; };
   const hide=()=>{cur.style.display="none";tip.style.display="none"}; let ht;
   svg.addEventListener("pointermove",e=>{ if(e.pointerType==="mouse") move(e); }); svg.addEventListener("pointerleave",e=>{ if(e.pointerType==="mouse") hide(); });
   svg.addEventListener("touchstart",e=>{ clearTimeout(ht); move(e); },{passive:true}); svg.addEventListener("touchmove",move,{passive:true});
@@ -260,14 +260,15 @@ async function buildAnalytics(){
     el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol||c.name}<small>${c.chain==="arc"?"Arc":"Robinhood"}</small></div><div class="price">${fmtPrice(prices[key(c)]??a.px)}</div></div></div>
     <div class="tiles">${(()=>{ const ath=a.ath??a.athWindow; return T("From ATH",fmtPct(a.px/ath-1),cls(a.px/ath-1)); })()}${T("Volume 7d vs prior 7d",fmtPct(a.vol7/a.volPrev-1),cls(a.vol7/a.volPrev-1))}${T("Holders",last.holders.toLocaleString()+` <small class="${cls(last.holders-pick(-8).holders)}">${last.holders-pick(-8).holders>=0?"+":""}${last.holders-pick(-8).holders} (7d)</small>`)}${T("Top 10 hold",last.top10.toFixed(1)+"%")}</div>
     <div class="cgrid"><div class="cbox"><h4>Price</h4><div data-c="price"></div></div><div class="cbox"><h4>Holdings by group (% of supply)<span class="legend"><span><i style="background:var(--c1)"></i>Whale</span><span><i style="background:var(--c2)"></i>Medium</span><span><i style="background:var(--c3)"></i>Small</span><span><i style="background:var(--c4)"></i>New</span></span></h4><div data-c="grp"></div></div>
-    <div class="cbox"><h4>Daily volume<span class="legend"><span><i style="background:#ff6ac1"></i>Volume</span><span><i style="background:#ffd23f"></i>7d average</span></span></h4><div data-c="vol"></div></div><div class="cbox"><h4>Holders</h4><div data-c="hold"></div></div></div>
+    <div class="cbox"><h4>Daily volume, last 30 days<span class="legend"><span><i style="background:#ff6ac1"></i>Volume</span><span><i style="background:#ffd23f"></i>7d average</span></span></h4><div data-c="vol"></div></div><div class="cbox"><h4>Holders</h4><div data-c="hold"></div></div></div>
     <ul class="read">${a.read.map(t=>`<li>${t}</li>`).join("")}${a.note?`<li class="small">${a.note}</li>`:""}</ul>`;
     box.appendChild(el);
     const pts=f=>r.map(x=>[x.d,f(x)]);
     chart(el.querySelector('[data-c="price"]'),[{name:"Price",color:"#2de2e6",pts:pts(x=>x.close)}],{id:"ap"+c.name,fmt:v=>"$"+(v>=10?v.toFixed(0):v>=1?v.toFixed(2):v.toPrecision(2))});
     chart(el.querySelector('[data-c="grp"]'),[{name:"Whale",color:"#2b99e7",pts:pts(x=>x.whale),fill:.12},{name:"Medium",color:"#c35c9b",pts:pts(x=>x.medium),fill:.06},{name:"Small",color:"#d37812",pts:pts(x=>x.small),fill:.06},{name:"New",color:"#5554b6",pts:pts(x=>x.new),fill:0}],{id:"ag"+c.name,fmt:v=>v.toFixed(1)+"%",zero:true});
     const tv=r.map(x=>x.buy+x.sell), ma=tv.map((_,i)=>{ const w=tv.slice(Math.max(0,i-6),i+1); return w.reduce((a,b)=>a+b,0)/w.length; });
-    chart(el.querySelector('[data-c="vol"]'),[{name:"Volume",color:"#ff6ac1",pts:r.map((x,i)=>[x.d,tv[i]]),fill:.25},{name:"7d average",color:"#ffd23f",pts:r.map((x,i)=>[x.d,ma[i]]),fill:0,dash:1},{name:"Buys",color:"#4ae8b0",pts:pts(x=>x.buy),hidden:1},{name:"Sells",color:"#ff4d5e",pts:pts(x=>x.sell),hidden:1}],{id:"av"+c.name,fmt:v=>"$"+short(v),zero:true});
+    const k30=Math.max(0,r.length-30), l30=a=>a.slice(k30);   // the 7-day average is computed on the full history, then cut to 30 days
+    chart(el.querySelector('[data-c="vol"]'),[{name:"Volume",color:"#ff6ac1",pts:l30(r.map((x,i)=>[x.d,tv[i]])),fill:.25},{name:"7d average",color:"#ffd23f",pts:l30(r.map((x,i)=>[x.d,ma[i]])),fill:0,dash:1},{name:"Buys",color:"#4ae8b0",pts:l30(pts(x=>x.buy)),hidden:1},{name:"Sells",color:"#ff4d5e",pts:l30(pts(x=>x.sell)),hidden:1}],{id:"av"+c.name,fmt:v=>"$"+short(v),zero:true});
     chart(el.querySelector('[data-c="hold"]'),[{name:"Holders",color:"#ff6ac1",pts:pts(x=>x.holders)}],{id:"ah"+c.name});
   });
 }
