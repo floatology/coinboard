@@ -5,7 +5,7 @@ const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523
 const pad = a => "0x" + "0".repeat(24) + a.toLowerCase().slice(2);
 const lc = s => (s || "").toLowerCase();
 
-async function rpc(url, method, params, tries = 4) {
+async function rpc(url, method, params, tries = 5) {
   let err;
   for (let i = 0; i < tries; i++) {
     try {
@@ -13,7 +13,7 @@ async function rpc(url, method, params, tries = 4) {
       const j = await r.json();
       if (j.error) throw new Error(JSON.stringify(j.error).slice(0, 200));
       return j.result;
-    } catch (e) { err = e; await new Promise(r => setTimeout(r, 400 * (i + 1))); }
+    } catch (e) { err = e; await new Promise(r => setTimeout(r, 600 * (i + 1))); }
   }
   throw err;
 }
@@ -33,7 +33,8 @@ async function logs(url, flt, a, b, maxSpan) {
   return (await pool(spans, 8, one)).flat();
 }
 const hex = x => parseInt(x, 16);
-async function dec(url, token) { try { return hex(await rpc(url, "eth_call", [{ to: token, data: "0x313ce567" }, "latest"], 2)); } catch { return 18; } }
+// decimals; null when it cannot be read (never guess: a wrong guess would scale every amount of that token)
+async function dec(url, token) { try { const v = hex(await rpc(url, "eth_call", [{ to: token, data: "0x313ce567" }, "latest"], 4)); return Number.isFinite(v) ? v : null; } catch { return null; } }
 async function sym(url, token) {
   try {
     const h = (await rpc(url, "eth_call", [{ to: token, data: "0x95d89b41" }, "latest"], 2)).slice(2);
@@ -41,7 +42,9 @@ async function sym(url, token) {
     return Buffer.from(h.slice(off + 64, off + 64 + len * 2), "hex").toString("utf8") || "?";
   } catch { return "?"; }
 }
-async function balanceOf(url, token, w) { try { return BigInt(await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + pad(w).slice(2) }, "latest"], 2)); } catch { return null; } }
+// balance; null when it cannot be read (an RPC refusal must never count as a zero balance)
+async function balanceOf(url, token, w) { try { const r = await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + pad(w).slice(2) }, "latest"], 5); return r && r.length > 2 ? BigInt(r) : null; } catch { return null; } }
+async function balanceAll(url, token, wallets) { let tot = 0n; for (const w of wallets) { const b = await balanceOf(url, token, w); if (b == null) return null; tot += b; } return tot; }
 
 async function scanChain(key, ch, notes) {
   const url = ch.rpc, wallets = ch.wallets.map(lc), wset = new Set(wallets);
@@ -56,12 +59,15 @@ async function scanChain(key, ch, notes) {
     for (const w of wallets) { flt.push({ topics: [TRANSFER, null, pad(w)] }); flt.push({ topics: [TRANSFER, pad(w)] }); }
     const got = (await Promise.all(flt.map(f => logs(url, f, from, head, ch.maxSpan)))).flat();
     const hashes = [...new Set(got.map(l => l.transactionHash))];
-    const receipts = await pool(hashes, 10, h => rpc(url, "eth_getTransactionReceipt", [h]));
+    const receipts = await pool(hashes, 6, async h => {   // a missing receipt would silently drop a trade: retry, then fail the scan
+      for (let i = 0; i < 5; i++) { const rc = await rpc(url, "eth_getTransactionReceipt", [h]); if (rc) return rc; await new Promise(r => setTimeout(r, 800 * (i + 1))); }
+      throw new Error("no receipt for " + h);
+    });
     // ETH price for WETH-valued flows
     let ethPx = 0;
     if (ch.weth) { try { const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${ch.weth}`); const j = await r.json(); const p = (j.pairs || []).filter(p => p.liquidity).sort((a, b) => b.liquidity.usd - a.liquidity.usd)[0]; ethPx = parseFloat(p.priceUsd) || 0; } catch { ethPx = ch.ethUsd || 0; } }
     const decs = {};
-    const getDec = async t => (decs[t] ??= await dec(url, t));
+    const getDec = async t => { if (decs[t] != null) return decs[t]; const d = hold[t] && hold[t].dec ? hold[t].dec : await dec(url, t); if (d == null) throw new Error("could not read decimals of " + t); return (decs[t] = d); };
     receipts.sort((a, b) => hex(a.blockNumber) - hex(b.blockNumber) || hex(a.transactionIndex) - hex(b.transactionIndex));
     for (const rc of receipts) {
       if (!rc || rc.status === "0x0") continue;
@@ -103,16 +109,23 @@ async function scanChain(key, ch, notes) {
       }
     }
   }
-  // verify against on-chain balances, fetch symbols
+  // verify against on-chain balances, fetch symbols. Only a balance read twice the same way may override the replay.
   const toks = Object.keys(hold);
-  await pool(toks, 8, async t => {
-    const h = hold[t]; h.dec = await dec(url, t); if (!h.symbol || h.symbol === h.token.slice(0, 8) || h.symbol === "?") h.symbol = await sym(url, t);
-    let tot = 0n; for (const w of wallets) { const b = await balanceOf(url, t, w); if (b != null) tot += b; }
-    h.onchain = Number(tot) / 10 ** h.dec;
-    if (Math.abs(h.onchain - h.qty) > Math.max(1e-6, 0.002 * Math.max(h.qty, h.onchain))) {
-      notes.push(`${key}: ${h.symbol} balance on chain ${h.onchain.toPrecision(8)} differs from the replay ${h.qty.toPrecision(8)}; using the chain`);
-      if (h.qty > 0) h.cost *= h.onchain / h.qty; h.qty = h.onchain;
+  await pool(toks, 4, async t => {
+    const h = hold[t]; const d = await dec(url, t); if (d != null) h.dec = d;
+    if (!h.symbol || h.symbol === h.token.slice(0, 8) || h.symbol === "?") h.symbol = await sym(url, t);
+    const tol = q => Math.max(1e-6, 0.002 * Math.max(h.qty, q));
+    let tot = await balanceAll(url, t, wallets);
+    if (tot == null) { notes.push(`${key}: could not read the ${h.symbol} balance; kept the replay`); return; }
+    let oc = Number(tot) / 10 ** h.dec;
+    if (Math.abs(oc - h.qty) > tol(oc)) {
+      await new Promise(r => setTimeout(r, 1500));
+      const again = await balanceAll(url, t, wallets);
+      if (again == null || Math.abs(Number(again) / 10 ** h.dec - oc) > tol(oc)) { notes.push(`${key}: ${h.symbol} balance reads disagree; kept the replay`); return; }
+      notes.push(`${key}: ${h.symbol} balance on chain ${oc.toPrecision(8)} differs from the replay ${h.qty.toPrecision(8)}; using the chain`);
+      if (h.qty > 0) h.cost *= oc / h.qty; h.qty = oc;
     }
+    h.onchain = oc;
   });
   return { head, hold: Object.values(hold) };
 }

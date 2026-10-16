@@ -69,7 +69,7 @@ def onchain(url: str, token: str, wallets: list[str], dec: int) -> float:
     return tot / 10 ** dec
 
 
-def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float) -> tuple[list[dict], list[dict]]:
+def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, chain_qty: dict) -> tuple[list[dict], list[dict]]:
     """Replay the wallets since the positions file's baseline (scripts/advance_baseline.js, the Scan button's code) and move
     the baseline to the current block. Returns the holdings to show: replayed quantities, costs and sold stats; coins bought
     since then are added (if DexScreener lists them and they are worth at least $0.50), coins sold out move to `closed`.
@@ -91,6 +91,15 @@ def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float) -
         return coins, closed
     for n in res.get("notes", []):
         print("replay note:", n)
+    # safety: the replay must agree with the balances this build read itself a moment ago; otherwise keep the positions file
+    rq = {(h["chain"], h["token"].lower()): h["qty"] for h in res["holdings"]}
+    bad = [f"{c['name']} replay {rq.get(k, 0):,.4f} vs chain {q:,.4f}" for c in coins
+           for k in [(c["chain"], c["token"].lower())] for q in [chain_qty.get(k)]
+           if q is not None and abs(rq.get(k, 0) - q) > max(0.01, 0.005 * q)]
+    if bad:
+        cfg_file.write_text(backup)
+        print("warning: replay disagrees with on-chain balances (" + "; ".join(bad) + "); showing the positions file as it is")
+        return coins, closed
     by = {(c["chain"], c["token"].lower()): c for c in coins}
     shown, gone = [], []
     for h in res["holdings"]:
@@ -135,7 +144,7 @@ def main() -> int:
     now = time.time()
     wallets = {"arc": [cfg["wallet_arc"]], "robinhood": [cfg["wallet_robinhood"], *cfg.get("wallets_robinhood_extra", [])]}
     sold = {x["name"]: x for x in cfg.get("partial_sales", [])}
-    coins, base = [], {k: [] for k in CHAINS}
+    coins, base, chain_qty = [], {k: [] for k in CHAINS}, {}
     for p in cfg["positions"]:
         dec = p.get("decimals", 18)
         s = sold.get(p["name"])
@@ -151,6 +160,7 @@ def main() -> int:
         except Exception:
             print(f"{p['name']:7} on-chain check skipped (RPC busy)")
             continue
+        chain_qty[(p["chain"], p["token"].lower())] = oc
         flag = "" if abs(oc - p["qty"]) <= max(0.01, p["qty"] * 0.002) else "   <-- MISMATCH, fix positions.json before deploying"
         print(f"{p['name']:7} positions {p['qty']:>16,.4f}  on-chain {oc:>16,.4f}{flag}")
     mkt = {}
@@ -178,7 +188,7 @@ def main() -> int:
     out = a.out
     (out / "api").mkdir(parents=True, exist_ok=True)
     (out / "api/_config.json").write_text(json.dumps(api))
-    coins, closed = advance(out / "api/_config.json", coins, closed, now)
+    coins, closed = advance(out / "api/_config.json", coins, closed, now, chain_qty)
     for f in ("scan.js", "refresh.js"):
         shutil.copy(ROOT / "dashboard/api" / f, out / "api" / f)
     (out / "vercel.json").write_text(json.dumps({
