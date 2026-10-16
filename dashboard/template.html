@@ -298,9 +298,12 @@ async function scan(){
     const r=await fetch("api/scan",{method:"POST",signal:AbortSignal.timeout(70000)}); const j=await r.json(); if(j.error) throw new Error(j.error);
     const had=new Map(holdings.map(c=>[key(c),c])); const out=[];
     for(const h of j.holdings){
-      const k=h.chain+":"+h.token; const pair=await dexToken(h.chain,h.token).catch(()=>null);
-      if(!pair || h.qty*parseFloat(pair.priceUsd)<0.5){ continue; }          // unlisted or dust: hidden
-      const old=had.get(k); out.push({name:h.symbol,symbol:h.symbol,chain:h.chain,token:h.token,qty:h.qty,cost:h.cost,soldQty:h.soldQty,soldProceeds:h.soldProceeds,realised:h.realised,pair:old?.pair||pair.pairAddress,bought:old?.bought,hist:old?.hist,px:parseFloat(pair.priceUsd)});
+      const k=h.chain+":"+h.token.toLowerCase(), old=had.get(k);
+      const pair=await dexToken(h.chain,h.token).catch(()=>undefined);   // undefined: the lookup failed; null: not listed
+      if(pair===undefined && !old) continue;                              // new coin and no answer: show it after the next scan
+      if(pair===null || (pair && h.qty*parseFloat(pair.priceUsd)<0.5)) continue;   // unlisted or dust: hidden
+      const px=pair?parseFloat(pair.priceUsd):(prices[k]??old.px);         // a coin already held is never dropped for a failed lookup
+      out.push({name:h.symbol,symbol:h.symbol,chain:h.chain,token:h.token,qty:h.qty,cost:h.cost,soldQty:h.soldQty,soldProceeds:h.soldProceeds,realised:h.realised,pair:old?.pair||pair.pairAddress,bought:old?.bought,hist:old?.hist,px});
     }
     const ord=[...had.keys()]; out.sort((a,b)=>{ const i=ord.indexOf(key(a)), j=ord.indexOf(key(b)); return (i<0?99:i)-(j<0?99:j); });
     const names=a=>a.map(c=>c.symbol).join(", ")||"none"; const added=out.filter(c=>!had.has(key(c))), gone=[...had.values()].filter(c=>!out.find(o=>key(o)===key(c)));
