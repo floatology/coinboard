@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800&family=Exo+2:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{--bg:#0d0221;--card:#170735;--chip:#220b47;--line:#3a1866;--ink:#f7eaff;--muted:#bea6dd;--head:#ffffff;--accent:#2de2e6;--teal:#ff6ac1;--aqua:#2a0d55;--glow:rgba(255,42,109,.22);
---gold:linear-gradient(90deg,#ffb300 0%,#ff8a00 55%,#ff5a1f 100%);--up:#4ae8b0;--down:#ff4d5e;--c1:#2de2e6;--c2:#ff6ac1;--c3:#ffb03a;--c4:#ffd23f;--brand:linear-gradient(90deg,#2de2e6,#ff2a6d 45%,#ff9a3d 75%,#ffd23f);--display:Orbitron,system-ui,sans-serif;--ui:'Exo 2',system-ui,sans-serif;color-scheme:dark}
+--gold:linear-gradient(90deg,#ffb300 0%,#ff8a00 55%,#ff5a1f 100%);--up:#4ae8b0;--down:#ff4d5e;--c1:#2de2e6;--c2:#ff6ac1;--c3:#4ae8b0;--c4:#ffd23f;--brand:linear-gradient(90deg,#2de2e6,#ff2a6d 45%,#ff9a3d 75%,#ffd23f);--display:Orbitron,system-ui,sans-serif;--ui:'Exo 2',system-ui,sans-serif;color-scheme:dark}
 *{box-sizing:border-box}html{background:var(--bg)}
 body{margin:0;background:radial-gradient(70% 40% at 80% 0%,var(--glow),transparent 70%),linear-gradient(180deg,#26084d 0,#0d0221 340px);color:var(--ink);font:15px/1.45 var(--ui);min-height:100vh}
 header{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;max-width:1500px;margin:0 auto;padding:18px 16px 4px}
@@ -131,28 +131,36 @@ holdings.forEach(c=>{ if(c.hist) hist[key(c)] = c.hist; });
 
 /* ---------- tiny SVG chart ---------- */
 function chart(el, series, o={}){
-  const W=o.w||340,H=o.h||130,L=36,R=6,T=6,B=16, ys=series.flatMap(s=>s.pts.map(p=>p[1])).filter(v=>v!=null&&isFinite(v));
+  const W=o.w||340,H=o.h||130,R=6,T=6,B=16, ys=series.flatMap(s=>s.pts.map(p=>p[1])).filter(v=>v!=null&&isFinite(v));
   if(!ys.length){ el.innerHTML='<div class="small" style="padding:30px;text-align:center">no data</div>'; return; }
   let lo=o.zero?0:Math.min(...ys), hi=Math.max(...ys); if(hi===lo){hi=lo+1}; const pad=(hi-lo)*0.08; if(!o.zero) lo=(Math.min(...ys)>=0?Math.max(0,lo-pad):lo-pad); hi+=pad;
   const xs=series.flatMap(s=>s.pts.map(p=>p[0])), x0=Math.min(...xs), x1=Math.max(...xs);
+  const L=Math.max(30,8+5.6*Math.max(...[0,1,2].map(i=>String((o.fmt||short)(lo+(hi-lo)*i/2)).length)));
   const X=t=>L+(t-x0)/(x1-x0||1)*(W-L-R), Y=v=>T+(1-(v-lo)/(hi-lo))*(H-T-B);
   let g="";
   for(let i=0;i<3;i++){ const v=lo+(hi-lo)*i/2, y=Y(v); g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="#24324f" stroke-width=".5"/><text x="${L-4}" y="${y+3}" text-anchor="end">${(o.fmt||short)(v)}</text>`; }
   [0,.5,1].forEach(f=>{ const t=x0+(x1-x0)*f; g+=`<text x="${X(t)}" y="${H-3}" text-anchor="${f==0?"start":f==1?"end":"middle"}">${new Date(t*1000).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</text>`; });
-  series.forEach((s,i)=>{ const pts=s.pts.filter(p=>p[1]!=null&&isFinite(p[1])); if(!pts.length) return;
+  series.forEach((s,i)=>{ const pts=s.pts.filter(p=>p[1]!=null&&isFinite(p[1])); if(!pts.length||s.hidden) return;
     const d=pts.map((p,k)=>(k?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" ");
     g+=`<defs><linearGradient id="g${o.id}${i}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${s.color}" stop-opacity="${s.fill??.22}"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient></defs>`;
     if((s.fill??.22)>0) g+=`<path d="${d} L${X(pts.at(-1)[0]).toFixed(1)} ${Y(lo)} L${X(pts[0][0]).toFixed(1)} ${Y(lo)}Z" fill="url(#g${o.id}${i})"/>`;
-    g+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6" stroke-linejoin="round"/>`; });
+    g+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.dash?1.8:1.6}" stroke-linejoin="round"${s.dash?' stroke-dasharray="5 4"':""}/>`; });
   el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block">${g}<line class="cur" y1="${T}" y2="${H-B}" stroke="#7f8dab" stroke-width=".6" style="display:none"/></svg>`;
   const svg=el.querySelector("svg"), cur=svg.querySelector(".cur"), tip=$("#tip");
   const move=ev=>{ const r=svg.getBoundingClientRect(), cx=(ev.touches?ev.touches[0].clientX:ev.clientX), t=x0+((cx-r.left)/r.width*W-L)/(W-L-R)*(x1-x0);
     const rows=series.map(s=>{ let b=null; for(const p of s.pts){ if(b==null||Math.abs(p[0]-t)<Math.abs(b[0]-t)) b=p; } return [s,b]; }).filter(x=>x[1]&&x[1][1]!=null);
     if(!rows.length) return; const tt=rows[0][1][0]; cur.setAttribute("x1",X(tt)); cur.setAttribute("x2",X(tt)); cur.style.display="";
     tip.innerHTML=`<b>${new Date(tt*1000).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</b><br>`+rows.map(([s,p])=>`<span style="color:${s.color}">●</span> ${s.name}: ${(o.fmt||short)(p[1])}`).join("<br>");
-    tip.style.display="block"; tip.style.left=Math.min(cx+12,innerWidth-170)+"px"; tip.style.top=(ev.touches?ev.touches[0].clientY:ev.clientY)-60+"px"; };
-  svg.addEventListener("mousemove",move); svg.addEventListener("touchmove",move,{passive:true}); svg.addEventListener("mouseleave",()=>{cur.style.display="none";tip.style.display="none"});
+    tipY=scrollY; tip.style.display="block"; tip.style.left=Math.min(cx+12,innerWidth-170)+"px"; tip.style.top=(ev.touches?ev.touches[0].clientY:ev.clientY)-60+"px"; };
+  const hide=()=>{cur.style.display="none";tip.style.display="none"}; let ht;
+  svg.addEventListener("pointermove",e=>{ if(e.pointerType==="mouse") move(e); }); svg.addEventListener("pointerleave",e=>{ if(e.pointerType==="mouse") hide(); });
+  svg.addEventListener("touchstart",e=>{ clearTimeout(ht); move(e); },{passive:true}); svg.addEventListener("touchmove",move,{passive:true});
+  svg.addEventListener("touchend",()=>{ clearTimeout(ht); ht=setTimeout(hide,1500); },{passive:true});
 }
+
+// any chart tooltip goes away when the page scrolls or the screen is tapped outside a chart
+let tipY=0; const hideTips=()=>{ $("#tip").style.display="none"; document.querySelectorAll("svg .cur").forEach(c=>c.style.display="none"); };
+addEventListener("scroll",()=>{ if($("#tip").style.display!=="none"&&Math.abs(scrollY-tipY)>40) hideTips(); },{passive:true}); document.addEventListener("touchstart",e=>{ if(!e.target.closest("svg")) hideTips(); },{passive:true});
 
 /* ---------- data sources ---------- */
 async function dexToken(chain, token){
@@ -250,15 +258,16 @@ async function buildAnalytics(){
     const T=(b,v,cl)=>`<div class="r"><b>${b}</b><span class="${cl||""}">${v}</span></div>`;
     const el=document.createElement("section"); el.className="card";
     el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol||c.name}<small>${c.chain==="arc"?"Arc":"Robinhood"}</small></div><div class="price">${fmtPrice(prices[key(c)]??a.px)}</div></div></div>
-    <div class="tiles">${T("From period high",fmtPct(a.px/a.athWindow-1),cls(a.px/a.athWindow-1))}${T("Volume 7d vs prior",fmtPct(a.vol7/a.volPrev-1),cls(a.vol7/a.volPrev-1))}${T("Holders",last.holders.toLocaleString()+` <small class="${cls(last.holders-pick(-8).holders)}">${last.holders-pick(-8).holders>=0?"+":""}${last.holders-pick(-8).holders}</small>`)}${T("Top 10 hold",last.top10.toFixed(1)+"%")}</div>
+    <div class="tiles">${(()=>{ const ath=a.ath??a.athWindow, d=a.athT?new Date(a.athT*1000).toLocaleDateString("en-GB",{day:"numeric",month:"short"}):""; return T("From all-time high",fmtPct(a.px/ath-1)+` <small class="small">ATH ${fmtPrice(ath)}${d?" · "+d:""}</small>`,cls(a.px/ath-1)); })()}${T("Volume 7d vs prior 7d",fmtPct(a.vol7/a.volPrev-1),cls(a.vol7/a.volPrev-1))}${T("Holders",last.holders.toLocaleString()+` <small class="${cls(last.holders-pick(-8).holders)}">${last.holders-pick(-8).holders>=0?"+":""}${last.holders-pick(-8).holders} (7d)</small>`)}${T("Top 10 hold",last.top10.toFixed(1)+"%")}</div>
     <div class="cgrid"><div class="cbox"><h4>Price</h4><div data-c="price"></div></div><div class="cbox"><h4>Holdings by group (% of supply)<span class="legend"><span><i style="background:var(--c1)"></i>Whale</span><span><i style="background:var(--c2)"></i>Medium</span><span><i style="background:var(--c3)"></i>Small</span><span><i style="background:var(--c4)"></i>New</span></span></h4><div data-c="grp"></div></div>
-    <div class="cbox"><h4>Daily volume<span class="legend"><span><i style="background:var(--up)"></i>Buys</span><span><i style="background:var(--down)"></i>Sells</span></span></h4><div data-c="vol"></div></div><div class="cbox"><h4>Holders</h4><div data-c="hold"></div></div></div>
+    <div class="cbox"><h4>Daily volume<span class="legend"><span><i style="background:#ff6ac1"></i>Volume</span><span><i style="background:#ffd23f"></i>7d average</span></span></h4><div data-c="vol"></div></div><div class="cbox"><h4>Holders</h4><div data-c="hold"></div></div></div>
     <ul class="read">${a.read.map(t=>`<li>${t}</li>`).join("")}${a.note?`<li class="small">${a.note}</li>`:""}</ul>`;
     box.appendChild(el);
     const pts=f=>r.map(x=>[x.d,f(x)]);
     chart(el.querySelector('[data-c="price"]'),[{name:"Price",color:"#2de2e6",pts:pts(x=>x.close)}],{id:"ap"+c.name,fmt:v=>"$"+(v>=10?v.toFixed(0):v>=1?v.toFixed(2):v.toPrecision(2))});
     chart(el.querySelector('[data-c="grp"]'),[{name:"Whale",color:"#2de2e6",pts:pts(x=>x.whale),fill:.18},{name:"Medium",color:"#ff6ac1",pts:pts(x=>x.medium),fill:.12},{name:"Small",color:"#4ae8b0",pts:pts(x=>x.small),fill:.1},{name:"New",color:"#ffd23f",pts:pts(x=>x.new),fill:0}],{id:"ag"+c.name,fmt:v=>v.toFixed(1)+"%",zero:true});
-    chart(el.querySelector('[data-c="vol"]'),[{name:"Buys",color:"#4ae8b0",pts:pts(x=>x.buy),fill:.2},{name:"Sells",color:"#ff4d5e",pts:pts(x=>x.sell),fill:.2}],{id:"av"+c.name,fmt:v=>"$"+short(v),zero:true});
+    const tv=r.map(x=>x.buy+x.sell), ma=tv.map((_,i)=>{ const w=tv.slice(Math.max(0,i-6),i+1); return w.reduce((a,b)=>a+b,0)/w.length; });
+    chart(el.querySelector('[data-c="vol"]'),[{name:"Volume",color:"#ff6ac1",pts:r.map((x,i)=>[x.d,tv[i]]),fill:.25},{name:"7d average",color:"#ffd23f",pts:r.map((x,i)=>[x.d,ma[i]]),fill:0,dash:1},{name:"Buys",color:"#4ae8b0",pts:pts(x=>x.buy),hidden:1},{name:"Sells",color:"#ff4d5e",pts:pts(x=>x.sell),hidden:1}],{id:"av"+c.name,fmt:v=>"$"+short(v),zero:true});
     chart(el.querySelector('[data-c="hold"]'),[{name:"Holders",color:"#ff6ac1",pts:pts(x=>x.holders)}],{id:"ah"+c.name});
   });
 }

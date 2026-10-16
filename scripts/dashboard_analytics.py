@@ -115,12 +115,17 @@ def analyse(name: str, cfg: dict, days: int) -> dict:
     vol7 = sum(x["buy"] + x["sell"] for x in r[-7:]); volp = sum(x["buy"] + x["sell"] for x in r[-14:-7]) or 1
     bs7 = sum(x["buy"] for x in r[-7:]) / max(1, sum(x["sell"] for x in r[-7:]))
     px_now = next((x["close"] for x in reversed(r) if x["close"]), 0)
-    ath = max((x["close"] or 0) for x in r)
+    # all-time high: the highest hourly closing price over the coin's whole history (trades of $5+, so one-off wicks don't count)
+    hourly = {}
+    for ts, b, side, usd, px in led:
+        if usd >= 5:
+            hourly[int(ts // 3600)] = px
+    ath_h, ath = max(hourly.items(), key=lambda kv: kv[1]) if hourly else (0, 0)
     read = []
     read.append(f"{wcount} whale wallets hold {r[-1]['whale']:.1f}% of supply ({w7:+.2f}% in 7 days); wallets under 7 days old hold {r[-1]['new']:.1f}% ({n7:+.2f}%).")
     read.append(f"Volume is {'up' if vol7 > volp else 'down'} {abs(vol7 / volp - 1) * 100:.0f}% on the prior week; buys are {bs7:.2f}x sells.")
     read.append(f"Holders {r[-1]['holders']:,} ({r[-1]['holders'] - pick(-8)['holders']:+,} in 7 days); top 10 hold {r[-1]['top10']:.1f}% of supply.")
-    return {"rows": r, "athWindow": ath, "px": px_now, "w7": round(w7, 3), "n7": round(n7, 3), "m7": round(m7, 3), "vol7": round(vol7), "volPrev": round(volp),
+    return {"rows": r, "ath": ath, "athT": ath_h * 3600, "px": px_now, "w7": round(w7, 3), "n7": round(n7, 3), "m7": round(m7, 3), "vol7": round(vol7), "volPrev": round(volp),
             "read": read, "note": "Unstaked NET only; 91% of NET is staked and not shown." if name == "NET" else ""}
 
 
