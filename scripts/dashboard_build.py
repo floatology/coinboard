@@ -119,6 +119,7 @@ def main() -> int:
     out = a.out
     (out / "api").mkdir(parents=True, exist_ok=True)
     (out / "api/_config.json").write_text(json.dumps(api))
+    shutil.copy(ROOT / "dashboard/lwc.js", out / "lwc.js")
     for f in ("scan.js", "refresh.js"):
         shutil.copy(ROOT / "dashboard/api" / f, out / "api" / f)
     (out / "vercel.json").write_text(json.dumps({

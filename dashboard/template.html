@@ -78,7 +78,7 @@ h1.logo{margin:0;line-height:0;text-shadow:none}h1.logo img{height:62px;width:au
 h1.logo img{height:62px}@media(max-width:520px){h1.logo img{height:36px}}
 .mchart{display:none;padding:8px 12px 12px;border-top:1px solid var(--line);background:#0d0221}
 .mchart .rng{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}.mchart .rb{display:flex;gap:6px}
-.mchart .rng button{background:var(--chip);border:1px solid var(--line);color:var(--muted);padding:4px 11px;border-radius:8px;font:600 12px var(--ui)}.mchart .rng button.on{background:var(--gold);color:#2b1000;border-color:transparent}
+.mchart .rng button{background:var(--chip);border:1px solid var(--line);color:var(--muted);padding:5px 8px;border-radius:8px;font:600 12px var(--ui)}.mchart .rb{gap:4px}.mchart a{white-space:nowrap}.mchart .rng button.on{background:var(--gold);color:#2b1000;border-color:transparent}.mchart .mc{min-height:300px}.mchart .rb{flex-wrap:wrap}
 .mchart a{color:var(--accent);font-size:12px;text-decoration:none}
 @media(max-width:820px){.chart.dx{display:none}.mchart{display:block}}
 </style>
@@ -105,6 +105,7 @@ h1.logo img{height:62px}@media(max-width:520px){h1.logo img{height:36px}}
 </main>
 <footer id="foot"></footer>
 <div class="tip" id="tip"></div>
+<script src="lwc.js"></script>
 <script>
 const DATA = __DATA__;
 const $ = s => document.querySelector(s);
@@ -317,17 +318,28 @@ if(saved?.at) $("#scanned").textContent="Scanned "+new Date(saved.at*1000).toLoc
 
 /* ---------- chart frames: load the ones near the screen, two at a time; on phones unload the ones far away ---------- */
 
-/* ---------- phone charts: our own fast line charts (from the hourly history) instead of the DexScreener frames ---------- */
-let mrange=72;
-const axisPx=v=>"$"+(v>=1000?Math.round(v).toLocaleString("en-US"):v>=10?v.toFixed(1):v>=1?v.toFixed(2):v.toPrecision(2));
-function mchartHTML(k,chain,pair){ return `<div class="mchart" data-mk="${k}"><div class="rng"><span class="rb">${[["1D",24],["3D",72],["8D",192]].map(([l,h])=>`<button data-r="${h}"${h===mrange?' class="on"':""}>${l}</button>`).join("")}</span>${pair?`<a href="https://dexscreener.com/${chain}/${pair}" target="_blank" rel="noopener">Open on DexScreener ↗</a>`:""}</div><div class="mc"></div></div>`; }
+/* ---------- phone charts: TradingView lightweight-charts candles from GeckoTerminal, timeframe chips ---------- */
+const TFS=[["1m","minute",1],["5m","minute",5],["15m","minute",15],["1h","hour",1],["4h","hour",4],["1D","day",1]];
+const GNET={arc:"arc",robinhood:"robinhood",ethereum:"eth"};
+const pxFmt=v=>v>=1000?Math.round(v).toLocaleString("en-US"):v>=1?v.toFixed(2):v>=0.01?v.toFixed(4):v.toPrecision(3);
+function mchartHTML(k,chain,pair){ return `<div class="mchart" data-mk="${k}" data-net="${GNET[chain]||chain}" data-pair="${pair||""}"><div class="rng"><span class="rb">${TFS.map(([l],i)=>`<button data-tf="${i}"${i===2?' class="on"':""}>${l}</button>`).join("")}</span>${pair?`<a href="https://dexscreener.com/${chain}/${pair}" target="_blank" rel="noopener">Full ↗</a>`:""}</div><div class="mc"></div></div>`; }
+const gq=[]; let gbusy=false;
+function gfetch(net,pair,i){ return new Promise((res,rej)=>{ gq.push({net,pair,i,res,rej}); pumpG(); }); }
+async function pumpG(){ if(gbusy||!gq.length) return; gbusy=true; const t=gq.shift(), [,unit,agg]=TFS[t.i], ck="oh:"+t.net+t.pair+t.i, c=store.get(ck,null);
+  try{ if(c&&Date.now()-c.t<60000) t.res(c.d); else { const r=await fetch(`https://api.geckoterminal.com/api/v2/networks/${t.net}/pools/${t.pair}/ohlcv/${unit}?aggregate=${agg}&limit=300`,{headers:{accept:"application/json"}}); if(!r.ok) throw new Error(r.status); const l=(await r.json()).data.attributes.ohlcv_list.map(x=>({time:x[0],open:x[1],high:x[2],low:x[3],close:x[4],v:x[5]})).sort((a,b)=>a.time-b.time); store.set(ck,{t:Date.now(),d:l}); t.res(l); } }
+  catch(e){ t.rej(e); } setTimeout(()=>{ gbusy=false; pumpG(); },1500); }
+const mc={}; // per card chart objects
+async function loadM(el,i){ const k=el.dataset.mk, box=el.querySelector(".mc"), pair=el.dataset.pair; if(!pair||typeof LightweightCharts==="undefined"){ box.innerHTML='<div class="small" style="padding:30px 0;text-align:center">No chart for this coin.</div>'; return; }
+  let o=mc[k]; if(!o){ box.innerHTML=""; const ch=LightweightCharts.createChart(box,{width:box.clientWidth||340,height:300,layout:{background:{color:"transparent"},textColor:"#bea6dd",fontFamily:"Exo 2"},grid:{vertLines:{color:"#2a1450"},horzLines:{color:"#2a1450"}},rightPriceScale:{borderColor:"#3a1866"},timeScale:{borderColor:"#3a1866",timeVisible:true,secondsVisible:false},crosshair:{mode:0},localization:{priceFormatter:pxFmt}});
+    const cs=ch.addCandlestickSeries({upColor:"#4ae8b0",downColor:"#ff4d5e",borderVisible:false,wickUpColor:"#4ae8b0",wickDownColor:"#ff4d5e",priceFormat:{type:"custom",formatter:pxFmt,minMove:1e-10}});
+    const vs=ch.addHistogramSeries({priceFormat:{type:"volume"},priceScaleId:"",color:"#3a1866"}); vs.priceScale().applyOptions({scaleMargins:{top:.82,bottom:0}});
+    o=mc[k]={ch,cs,vs,box}; }
+  const seq=o.seq=(o.seq||0)+1; el.querySelectorAll("[data-tf]").forEach(b=>b.classList.toggle("on",+b.dataset.tf===i)); o.box.dataset.msg="";
+  try{ const d=await gfetch(el.dataset.net,pair,i); if(o.seq!==seq) return; o.cs.setData(d); o.vs.setData(d.map(x=>({time:x.time,value:x.v,color:x.close>=x.open?"rgba(74,232,176,.35)":"rgba(255,77,94,.35)"}))); o.ch.timeScale().fitContent(); }
+  catch(e){ if(o.seq===seq){ o.box.insertAdjacentHTML("beforeend",'<div class="small" style="padding:8px 0;text-align:center">Candles unavailable right now, tap a timeframe to retry.</div>'); } } }
+const mobs=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting&&!e.target.dataset.go){ e.target.dataset.go="1"; loadM(e.target,2); } }),{rootMargin:"400px 0px"});
 function drawAllM(){ if(!matchMedia("(max-width:820px)").matches) return;
-  document.querySelectorAll(".mchart").forEach(el=>{ const k=el.dataset.mk, H=hist[k]||mk[k], box=el.querySelector(".mc");
-    el.querySelectorAll("[data-r]").forEach(b=>{ b.onclick=()=>{ mrange=+b.dataset.r; document.querySelectorAll(".mchart [data-r]").forEach(x=>x.classList.toggle("on",+x.dataset.r===mrange)); drawAllM(); }; b.classList.toggle("on",+b.dataset.r===mrange); });
-    if(!H||H.length<2){ box.innerHTML='<div class="small" style="padding:30px 0;text-align:center">Chart loading…</div>'; return; }
-    const t0=H.at(-1)[0]-mrange*3600; let pts=H.filter(x=>x[0]>=t0); if(pts.length<2) pts=H.slice(-2);
-    const up=pts.at(-1)[1]>=pts[0][1];
-    chart(box,[{name:"Price",color:up?"#4ae8b0":"#ff4d5e",pts}],{id:"mc"+k+mrange,h:240,w:700,fmt:axisPx}); }); }
+  document.querySelectorAll(".mchart").forEach(el=>{ if(!el.dataset.bound){ el.dataset.bound="1"; el.querySelectorAll("[data-tf]").forEach(b=>b.onclick=()=>loadM(el,+b.dataset.tf)); mobs.observe(el); } const o=mc[el.dataset.mk]; if(o) o.ch.applyOptions({width:el.querySelector(".mc").clientWidth}); }); }
 addEventListener("resize",drawAllM);
 const phone=matchMedia("(max-width:820px)"), fq=[]; let fbusy=0;
 function pumpFrames(){ while(fbusy<2&&fq.length){ const f=fq.shift(); if(!f.dataset.want||f.dataset.on||!f.offsetParent) continue; fbusy++; f.dataset.on="1"; let done=false; const fin=()=>{ if(done) return; done=true; fbusy--; pumpFrames(); }; f.onload=fin; setTimeout(fin,9000); f.src=f.dataset.src; } }
