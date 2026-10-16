@@ -40,6 +40,12 @@ def analyse(name: str, cfg: dict, days: int) -> dict:
     led = con.execute(f"select ts, block, side, usd, price_usd from '{d}/ledger.parquet' order by block, log_index").fetchall()
     lt = np.array([r[0] for r in led], dtype=float); lb = np.array([r[1] for r in led], dtype=float)
     now = float(lt.max())
+    # all-time high: the highest hourly closing price over the coin's whole history (trades of $5+, so one-off wicks don't count)
+    hourly = {}
+    for ts, b, side, usd, px in led:
+        if usd >= 5:
+            hourly[int(ts // 3600)] = px
+    ath_h, ath = max(hourly.items(), key=lambda kv: kv[1]) if hourly else (0, 0)
     day0 = int(now // 86400) - days + 1
     # pair/pool addresses from the archive metadata (v3 pools, DexScreener pairs)
     excl = set(cfg["excl"]) | {ZERO, DEAD}
@@ -88,10 +94,17 @@ def analyse(name: str, cfg: dict, days: int) -> dict:
         return {k: v / sup * 100 for k, v in tot.items()}, holders, sum(top[:10]) / sup * 100, cnt
 
     blocks_ts = np.interp([r[0] for r in tr], lb, lt)
+    supply, sup_ath = 0.0, None
     for (b, s, t, v), ts in zip(tr, blocks_ts):
         while nxt < len(ds) and ts >= (ds[nxt] + 1) * 86400:
             snaps.append((ds[nxt],) + snapshot((ds[nxt] + 1) * 86400)); nxt += 1
         v = float(v)
+        if sup_ath is None and ts >= (ath_h + 1) * 3600:
+            sup_ath = supply
+        if s == ZERO or s == DEAD:
+            supply += v
+        if t == ZERO or t == DEAD:
+            supply -= v
         bal[s] = bal.get(s, 0.0) - v; bal[t] = bal.get(t, 0.0) + v
         if t not in first:
             first[t] = ts
@@ -115,17 +128,11 @@ def analyse(name: str, cfg: dict, days: int) -> dict:
     vol7 = sum(x["buy"] + x["sell"] for x in r[-7:]); volp = sum(x["buy"] + x["sell"] for x in r[-14:-7]) or 1
     bs7 = sum(x["buy"] for x in r[-7:]) / max(1, sum(x["sell"] for x in r[-7:]))
     px_now = next((x["close"] for x in reversed(r) if x["close"]), 0)
-    # all-time high: the highest hourly closing price over the coin's whole history (trades of $5+, so one-off wicks don't count)
-    hourly = {}
-    for ts, b, side, usd, px in led:
-        if usd >= 5:
-            hourly[int(ts // 3600)] = px
-    ath_h, ath = max(hourly.items(), key=lambda kv: kv[1]) if hourly else (0, 0)
     read = []
     read.append(f"{wcount} whale wallets hold {r[-1]['whale']:.1f}% of supply ({w7:+.2f}% in 7 days); wallets under 7 days old hold {r[-1]['new']:.1f}% ({n7:+.2f}%).")
     read.append(f"Volume is {'up' if vol7 > volp else 'down'} {abs(vol7 / volp - 1) * 100:.0f}% on the prior week; buys are {bs7:.2f}x sells.")
     read.append(f"Holders {r[-1]['holders']:,} ({r[-1]['holders'] - pick(-8)['holders']:+,} in 7 days); top 10 hold {r[-1]['top10']:.1f}% of supply.")
-    return {"rows": r, "ath": ath, "athT": ath_h * 3600, "px": px_now, "w7": round(w7, 3), "n7": round(n7, 3), "m7": round(m7, 3), "vol7": round(vol7), "volPrev": round(volp),
+    return {"rows": r, "ath": ath, "athT": ath_h * 3600, "supply": round(supply, 4), "athMcap": round(ath * (sup_ath if sup_ath is not None else supply)), "px": px_now, "w7": round(w7, 3), "n7": round(n7, 3), "m7": round(m7, 3), "vol7": round(vol7), "volPrev": round(volp),
             "read": read, "note": "Unstaked NET only; 91% of NET is staked and not shown." if name == "NET" else ""}
 
 

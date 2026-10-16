@@ -47,7 +47,7 @@ h2{font:600 22px var(--display);color:var(--head);margin:22px 0 10px}
 .res{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden}
 .res div{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);font-size:13px}.res div:last-child{border:0}
 .res button{background:var(--gold);color:#2b1000;padding:6px 12px}
-.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:0 16px 10px}
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:0 16px 10px}
 @media(max-width:480px){.tiles{grid-template-columns:repeat(2,1fr)}.roi{grid-template-columns:repeat(2,1fr)}.name{font-size:26px}}
 .cgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 12px 12px}@media(max-width:560px){.cgrid{grid-template-columns:1fr}}
 .cbox{background:#12053a;border:1px solid var(--line);border-radius:12px;padding:8px 10px 4px}.cbox h4{margin:0 0 2px;font:600 12px var(--ui);color:var(--muted);letter-spacing:.3px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
@@ -144,7 +144,7 @@ function chart(el, series, o={}){
     const d=pts.map((p,k)=>(k?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" ");
     g+=`<defs><linearGradient id="g${o.id}${i}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${s.color}" stop-opacity="${s.fill??.22}"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient></defs>`;
     if((s.fill??.22)>0) g+=`<path d="${d} L${X(pts.at(-1)[0]).toFixed(1)} ${Y(lo)} L${X(pts[0][0]).toFixed(1)} ${Y(lo)}Z" fill="url(#g${o.id}${i})"/>`;
-    g+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"${s.dash?' stroke-dasharray="5 4"':""}/>`; });
+    g+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width||2}" stroke-linejoin="round"${s.dash?' stroke-dasharray="5 4"':""}/>`; });
   el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block">${g}<line class="cur" y1="${T}" y2="${H-B}" stroke="#7f8dab" stroke-width=".6" style="display:none"/></svg>`;
   const svg=el.querySelector("svg"), cur=svg.querySelector(".cur"), tip=$("#tip");
   const move=ev=>{ const r=svg.getBoundingClientRect(), cx=(ev.touches?ev.touches[0].clientX:ev.clientX), t=x0+((cx-r.left)/r.width*W-L)/(W-L-R)*(x1-x0);
@@ -218,7 +218,7 @@ function renderPortfolio(){
   let V=0,C=0;
   holdings.forEach(c=>{
     const el=document.querySelector(`.card[data-k="${key(c)}"]`); if(!el) return; const p=prices[key(c)]??c.px??(hist[key(c)]||[[0,0]]).at(-1)[1];
-    const q=k=>el.querySelector(`[data-k="${k}"]`); q("price").textContent=fmtPrice(p); const mi=info[key(c)], mv=mi?(mi.marketCap||mi.fdv):0; q("mcap").textContent=mv?"Mcap "+fmtMcap(mv):""; fillPeriods(el,c,p);
+    const q=k=>el.querySelector(`[data-k="${k}"]`); q("price").textContent=fmtPrice(p); const mi=info[key(c)], mv=mi?(mi.fdv||mi.marketCap):0; q("mcap").textContent=mv?"Mcap "+fmtMcap(mv):""; fillPeriods(el,c,p);
     const val=p*c.qty, pl=val-c.cost; V+=val; C+=c.cost;
     q("val").textContent=fmtUSD(val); q("cost").textContent=fmtUSD(c.cost); q("pl").textContent=(pl>=0?"+":"−")+fmtUSD(Math.abs(pl)); q("pl").className=cls(pl); q("ret").textContent=fmtPct(val/c.cost-1);
     const avgb=c.cost/c.qty, avgs=c.soldQty>0?c.soldProceeds/c.soldQty:null;
@@ -258,7 +258,7 @@ async function buildAnalytics(){
     const T=(b,v,cl)=>`<div class="r"><b>${b}</b><span class="${cl||""}">${v}</span></div>`;
     const el=document.createElement("section"); el.className="card";
     el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol||c.name}<small>${c.chain==="arc"?"Arc":"Robinhood"}</small></div><div class="price">${fmtPrice(prices[key(c)]??a.px)}</div></div></div>
-    <div class="tiles">${(()=>{ const ath=a.ath??a.athWindow; return T("From ATH",fmtPct(a.px/ath-1),cls(a.px/ath-1)); })()}${T("Volume 7d vs prior 7d",fmtPct(a.vol7/a.volPrev-1),cls(a.vol7/a.volPrev-1))}${T("Holders",last.holders.toLocaleString()+` <small class="${cls(last.holders-pick(-8).holders)}">${last.holders-pick(-8).holders>=0?"+":""}${last.holders-pick(-8).holders} (7d)</small>`)}${T("Top 10 hold",last.top10.toFixed(1)+"%")}</div>
+    <div class="tiles">${(()=>{ const ath=a.ath??a.athWindow, px=prices[key(c)]??a.px; return (a.supply?T("Mcap now",fmtMcap(px*a.supply))+T("ATH mcap",fmtMcap(a.athMcap)):"")+T("From ATH",fmtPct(px/ath-1),cls(px/ath-1)); })()}${T("Holders",last.holders.toLocaleString()+` <small class="${cls(last.holders-pick(-8).holders)}">${last.holders-pick(-8).holders>=0?"+":""}${last.holders-pick(-8).holders} (7d)</small>`)}${T("Volume 7d vs prior 7d",fmtPct(a.vol7/a.volPrev-1),cls(a.vol7/a.volPrev-1))}${T("Top 10 hold",last.top10.toFixed(1)+"%")}</div>
     <div class="cgrid"><div class="cbox"><h4>Price</h4><div data-c="price"></div></div><div class="cbox"><h4>Holdings by group (% of supply)<span class="legend"><span><i style="background:var(--c1)"></i>Whale</span><span><i style="background:var(--c2)"></i>Medium</span><span><i style="background:var(--c3)"></i>Small</span><span><i style="background:var(--c4)"></i>New</span></span></h4><div data-c="grp"></div></div>
     <div class="cbox"><h4>Daily volume, last 30 days<span class="legend"><span><i style="background:#ff6ac1"></i>Volume</span><span><i style="background:#ffd23f"></i>7d average</span></span></h4><div data-c="vol"></div></div><div class="cbox"><h4>Holders</h4><div data-c="hold"></div></div></div>
     <ul class="read">${a.read.map(t=>`<li>${t}</li>`).join("")}${a.note?`<li class="small">${a.note}</li>`:""}</ul>`;
@@ -268,7 +268,7 @@ async function buildAnalytics(){
     chart(el.querySelector('[data-c="grp"]'),[{name:"Whale",color:"#2b99e7",pts:pts(x=>x.whale),fill:.12},{name:"Medium",color:"#c35c9b",pts:pts(x=>x.medium),fill:.06},{name:"Small",color:"#d37812",pts:pts(x=>x.small),fill:.06},{name:"New",color:"#5554b6",pts:pts(x=>x.new),fill:0}],{id:"ag"+c.name,fmt:v=>v.toFixed(1)+"%",zero:true});
     const tv=r.map(x=>x.buy+x.sell), ma=tv.map((_,i)=>{ const w=tv.slice(Math.max(0,i-6),i+1); return w.reduce((a,b)=>a+b,0)/w.length; });
     const k30=Math.max(0,r.length-30), l30=a=>a.slice(k30);   // the 7-day average is computed on the full history, then cut to 30 days
-    chart(el.querySelector('[data-c="vol"]'),[{name:"Volume",color:"#ff6ac1",pts:l30(r.map((x,i)=>[x.d,tv[i]])),fill:.25},{name:"7d average",color:"#ffd23f",pts:l30(r.map((x,i)=>[x.d,ma[i]])),fill:0,dash:1},{name:"Buys",color:"#4ae8b0",pts:l30(pts(x=>x.buy)),hidden:1},{name:"Sells",color:"#ff4d5e",pts:l30(pts(x=>x.sell)),hidden:1}],{id:"av"+c.name,fmt:v=>"$"+short(v),zero:true});
+    chart(el.querySelector('[data-c="vol"]'),[{name:"Volume",color:"#ff6ac1",pts:l30(r.map((x,i)=>[x.d,tv[i]])),fill:.25},{name:"7d average",color:"#ffd23f",pts:l30(r.map((x,i)=>[x.d,ma[i]])),fill:0,width:1.2},{name:"Buys",color:"#4ae8b0",pts:l30(pts(x=>x.buy)),hidden:1},{name:"Sells",color:"#ff4d5e",pts:l30(pts(x=>x.sell)),hidden:1}],{id:"av"+c.name,fmt:v=>"$"+short(v),zero:true});
     chart(el.querySelector('[data-c="hold"]'),[{name:"Holders",color:"#ff6ac1",pts:pts(x=>x.holders)}],{id:"ah"+c.name});
   });
 }
