@@ -16,9 +16,24 @@ ap.add_argument("--dir", type=Path, default=ROOT / "dashboard/site")
 a = ap.parse_args()
 tok = os.environ.get("VERCEL_TOKEN") or sys.exit("Set VERCEL_TOKEN")
 with httpx.Client(base_url="https://api.vercel.com", headers={"Authorization": f"Bearer {tok}"}, timeout=90) as c:
-    team = c.get("/v2/user").raise_for_status().json()["user"].get("defaultTeamId")
-    q = {"teamId": team} if team else {}
-    proj = c.get(f"/v9/projects/{a.project}", params=q).raise_for_status().json()
+    # A token limited to one team cannot read /v2/user (404), so find the team that owns the project instead.
+    cands = [os.environ.get("VERCEL_TEAM_ID")] if os.environ.get("VERCEL_TEAM_ID") else []
+    u = c.get("/v2/user")
+    if u.status_code == 200:
+        cands.append(u.json()["user"].get("defaultTeamId"))
+    t = c.get("/v2/teams")
+    if t.status_code == 200:
+        cands += [x["id"] for x in t.json().get("teams", [])]
+    cands += [None]
+    q, proj = None, None
+    for team in dict.fromkeys(cands):
+        qq = {"teamId": team} if team else {}
+        r = c.get(f"/v9/projects/{a.project}", params=qq)
+        if r.status_code == 200:
+            q, proj = qq, r.json()
+            break
+    if proj is None:
+        sys.exit(f"Vercel project '{a.project}' not found with this token (check VERCEL_PROJECT and that the token's scope is the team that owns it)")
     if (proj.get("ssoProtection") or {}).get("deploymentType") != "all":
         sys.exit("Protection is not 'all'; refusing to deploy")
     blobs = {f.relative_to(a.dir).as_posix(): f.read_bytes() for f in sorted(a.dir.rglob("*")) if f.is_file()}
