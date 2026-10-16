@@ -5,23 +5,23 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Coin Board</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1222'/%3E%3Cpath d='M12 44 24 30l9 7 19-21' fill='none' stroke='%23e9c662' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d0221'/%3E%3Cpath d='M12 44 24 30l9 7 19-21' fill='none' stroke='%232de2e6' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800&family=Exo+2:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--bg:#0b1222;--card:#111b30;--chip:#17233c;--line:#24324f;--ink:#e6ecf6;--muted:#a3b0c7;--head:#f3ead2;--accent:#8fb2ff;--teal:#6f95f0;--aqua:#1d2c4d;--glow:rgba(111,149,240,.14);
---gold:linear-gradient(135deg,#b07d18 0%,#d4a53a 55%,#e9c662 100%);--up:#4fd08a;--down:#ff7a7a;--c1:#e9c662;--c2:#8fb2ff;--c3:#4fd08a;--c4:#ff9bd0;color-scheme:dark}
+:root{--bg:#0d0221;--card:#170735;--chip:#220b47;--line:#3a1866;--ink:#f7eaff;--muted:#bea6dd;--head:#ffffff;--accent:#2de2e6;--teal:#ff6ac1;--aqua:#2a0d55;--glow:rgba(255,42,109,.22);
+--gold:linear-gradient(90deg,#ffb300 0%,#ff8a00 55%,#ff5a1f 100%);--up:#4ae8b0;--down:#ff4d5e;--c1:#2de2e6;--c2:#ff6ac1;--c3:#ffb03a;--c4:#ffd23f;--brand:linear-gradient(90deg,#2de2e6,#ff2a6d 45%,#ff9a3d 75%,#ffd23f);--display:Orbitron,system-ui,sans-serif;--ui:'Exo 2',system-ui,sans-serif;color-scheme:dark}
 *{box-sizing:border-box}html{background:var(--bg)}
-body{margin:0;background:radial-gradient(70% 40% at 80% 0%,var(--glow),transparent 70%),linear-gradient(180deg,#101b33 0,#0b1222 320px);color:var(--ink);font:15px/1.45 Inter,system-ui,sans-serif;min-height:100vh}
+body{margin:0;background:radial-gradient(70% 40% at 80% 0%,var(--glow),transparent 70%),linear-gradient(180deg,#26084d 0,#0d0221 340px);color:var(--ink);font:15px/1.45 var(--ui);min-height:100vh}
 header{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;max-width:1500px;margin:0 auto;padding:18px 16px 4px}
-h1{font:600 30px/1 "Cormorant Garamond",Georgia,serif;color:var(--head);margin:0}h1 span{background:var(--gold);-webkit-background-clip:text;background-clip:text;color:transparent}
-.total{text-align:center}.total .big{display:block;font:600 36px/1 "Cormorant Garamond",serif;color:var(--head)}.total .sub{display:block;color:var(--muted);font-size:13px;margin-top:4px}
+h1{font:700 22px/1 var(--display);color:var(--head);margin:0}h1 span{background:var(--gold);-webkit-background-clip:text;background-clip:text;color:transparent}
+.total{text-align:center}.total .big{display:block;font:600 36px/1 var(--display);color:var(--head)}.total .sub{display:block;color:var(--muted);font-size:13px;margin-top:4px}
 .actions{justify-self:end;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
-button{font:600 14px Inter;cursor:pointer;border:0;border-radius:10px;padding:9px 16px}
-#scan{background:var(--gold);color:#1f1505}#scan:disabled{opacity:.6;cursor:wait}
+button{font:600 14px var(--ui);cursor:pointer;border:0;border-radius:10px;padding:9px 16px}
+#scan{background:var(--gold);color:#2b1000}#scan:disabled{opacity:.6;cursor:wait}
 .small{font-size:11px;color:var(--muted)}
 nav{max-width:1500px;margin:6px auto 0;padding:0 16px;display:flex;gap:6px;border-bottom:1px solid var(--line)}
 nav button{background:none;color:var(--muted);border-radius:10px 10px 0 0;padding:10px 18px;border-bottom:2px solid transparent}
-nav button.on{color:var(--head);border-bottom-color:#d4a53a;background:var(--chip)}
+nav button.on{color:var(--head);border-bottom-color:#2de2e6;background:var(--chip)}
 .pos{color:var(--up)}.neg{color:var(--down)}
 main{max-width:1500px;margin:0 auto;padding:14px 16px 10px}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
@@ -29,33 +29,42 @@ main{max-width:1500px;margin:0 auto;padding:14px 16px 10px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.28)}
 .top{padding:14px 16px 12px}
 .row1{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
-.name{font:600 28px/1 "Cormorant Garamond",serif;color:var(--head)}.name small{font:500 12px Inter;color:var(--muted);margin-left:8px;letter-spacing:.4px;text-transform:uppercase}
+.name{font:700 21px/1 var(--display);color:var(--head)}.name small{font:500 12px var(--ui);color:var(--muted);margin-left:8px;letter-spacing:.4px;text-transform:uppercase}
 .price{font-weight:600;font-size:18px}.pr{display:flex;align-items:baseline;gap:10px}.mcap{color:var(--muted);font-size:13px;font-weight:500}
 .periods{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:12px 0}@media(max-width:520px){.periods{gap:4px}.periods>*{padding-left:2px!important;padding-right:2px!important;font-size:12px}}
 .p{background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:6px 4px;text-align:center}.p b{display:block;font-size:11px;font-weight:500;color:var(--muted)}.p span{display:block;font-weight:600;font-size:14px;margin-top:2px}
 .roi{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .r{background:var(--aqua);border-radius:10px;padding:8px 10px}.r b{display:block;font-size:11px;font-weight:500;color:var(--muted)}.r span{display:block;font-weight:700;font-size:16px;margin-top:2px}
-.r.main{background:var(--gold);color:#1f1505}.r.main b{color:#3b2a09}.r.main span{color:#1f1505}
+.r.main{background:var(--gold);color:#2b1000}.r.main b{color:#4a1d00}.r.main span{color:#2b1000}
 .avg{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:8px;font-size:12px;color:var(--muted)}.avg b{color:var(--ink);font-weight:600}
-.chart{height:340px;border-top:1px solid var(--line);background:#0b1222}.chart iframe{width:100%;height:100%;border:0;display:block}
+.chart{height:340px;border-top:1px solid var(--line);background:#0d0221}.chart iframe{width:100%;height:100%;border:0;display:block}
 .x{background:none;color:var(--muted);padding:2px 8px;font-size:18px}
-h2{font:600 22px "Cormorant Garamond",serif;color:var(--head);margin:22px 0 10px}
+h2{font:600 22px var(--display);color:var(--head);margin:22px 0 10px}
 .sold{width:100%;border-collapse:collapse;font-size:13px}.sold th,.sold td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line)}.sold th:first-child,.sold td:first-child{text-align:left}.sold th{color:var(--muted);font-weight:500}
 .ref .periods{margin:10px 0 6px}.ref .mini{padding:0 8px 8px}
 .log{font-size:12px;color:var(--muted);margin:8px 0}
-.search{display:flex;gap:8px;margin:4px 0 12px}.search input{flex:1;background:var(--chip);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:11px 14px;font:15px Inter;min-width:0}
+.search{display:flex;gap:8px;margin:4px 0 12px}.search input{flex:1;background:var(--chip);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:11px 14px;font:15px var(--ui);min-width:0}
 .res{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden}
 .res div{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);font-size:13px}.res div:last-child{border:0}
-.res button{background:var(--gold);color:#1f1505;padding:6px 12px}
+.res button{background:var(--gold);color:#2b1000;padding:6px 12px}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:0 16px 10px}
 @media(max-width:480px){.tiles{grid-template-columns:repeat(2,1fr)}.roi{grid-template-columns:repeat(2,1fr)}.name{font-size:26px}}
 .cgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 12px 12px}@media(max-width:560px){.cgrid{grid-template-columns:1fr}}
-.cbox{background:#0e172b;border:1px solid var(--line);border-radius:12px;padding:8px 10px 4px}.cbox h4{margin:0 0 2px;font:600 12px Inter;color:var(--muted);letter-spacing:.3px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.cbox{background:#12053a;border:1px solid var(--line);border-radius:12px;padding:8px 10px 4px}.cbox h4{margin:0 0 2px;font:600 12px var(--ui);color:var(--muted);letter-spacing:.3px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 .legend span{margin-left:8px;font-weight:500}.legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
 .read{padding:2px 16px 14px;color:var(--muted);font-size:13px}.read li{margin:3px 0}.read ul{margin:0;padding-left:18px}
-svg text{fill:#7f8dab;font:10px Inter}.tip{position:fixed;pointer-events:none;background:#0b1222;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12px;z-index:9;display:none;white-space:nowrap}
+svg text{fill:#a58ccc;font:10px 'Exo 2'}.tip{position:fixed;pointer-events:none;background:#0d0221;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12px;z-index:9;display:none;white-space:nowrap}
 footer{max-width:1500px;margin:0 auto;padding:10px 16px 30px;color:var(--muted);font-size:12px}
-.abar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:14px 0 4px}#arefresh{background:var(--gold);color:#1f1505;border:0;border-radius:10px;padding:9px 16px;font:700 13px Inter,sans-serif;cursor:pointer;white-space:nowrap}#arefresh:disabled{opacity:.7;cursor:default}.asof-ok{color:var(--up)!important;font-weight:600}
+.abar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:14px 0 4px}#arefresh{background:var(--gold);color:#2b1000;border:0;border-radius:10px;padding:9px 16px;font:700 13px var(--ui);cursor:pointer;white-space:nowrap}#arefresh:disabled{opacity:.7;cursor:default}.asof-ok{color:var(--up)!important;font-weight:600}
+.horizon{position:relative;height:120px;overflow:hidden;background:linear-gradient(180deg,#0d0221 0%,#26084d 55%,#6a1b6e calc(100% - 46px),#0d0221 calc(100% - 46px));border-bottom:1px solid var(--line)}
+.horizon::before{content:'';position:absolute;inset:auto 0 0 0;height:46px;background:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 110' preserveAspectRatio='none'><path d='M600 0L-1800 110M600 0L-1650 110M600 0L-1500 110M600 0L-1350 110M600 0L-1200 110M600 0L-1050 110M600 0L-900 110M600 0L-750 110M600 0L-600 110M600 0L-450 110M600 0L-300 110M600 0L-150 110M600 0L0 110M600 0L150 110M600 0L300 110M600 0L450 110M600 0L600 110M600 0L750 110M600 0L900 110M600 0L1050 110M600 0L1200 110M600 0L1350 110M600 0L1500 110M600 0L1650 110M600 0L1800 110M600 0L1950 110M600 0L2100 110M600 0L2250 110M600 0L2400 110M600 0L2550 110M600 0L2700 110M600 0L2850 110M600 0L3000 110' stroke='%23ff2aaa' stroke-width='1.6' fill='none' vector-effect='non-scaling-stroke'/><path d='M0 1.4H1200M0 5.4H1200M0 12.2H1200M0 21.7H1200M0 34.0H1200M0 48.9H1200M0 66.5H1200M0 86.9H1200M0 110.0H1200' stroke='%232de2e6' stroke-width='1.4' fill='none' vector-effect='non-scaling-stroke'/></svg>") center/100% 100% no-repeat;-webkit-mask-image:linear-gradient(rgba(0,0,0,.35),#000 60%);mask-image:linear-gradient(rgba(0,0,0,.35),#000 60%)}
+.horizon::after{content:'';position:absolute;left:50%;transform:translateX(-50%);bottom:46px;width:170px;height:84px;border-radius:70px 70px 0 0;background:linear-gradient(180deg,#ffe46b 0%,#ff9a3d 45%,#ff2a6d 100%);-webkit-mask-image:repeating-linear-gradient(180deg,#000 0 62%,transparent 62% 66%,#000 66% 76%,transparent 76% 82%,#000 82% 90%,transparent 90% 100%);mask-image:repeating-linear-gradient(180deg,#000 0 62%,transparent 62% 66%,#000 66% 76%,transparent 76% 82%,#000 82% 90%,transparent 90% 100%);filter:drop-shadow(0 0 22px rgba(255,79,139,.6));opacity:.92}
+.palms{position:absolute;inset:0;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 200'><g fill='%23070112'><path d='M58 200c2-40 4-80 12-118l6 1c-7 37-9 77-10 117z'/><path d='M72 84C55 60 30 55 4 66c22-4 44 2 62 22z'/><path d='M72 84c-6-26-24-44-50-50 20 10 34 28 42 52z'/><path d='M72 84c8-26 26-40 48-42-20 8-34 22-40 44z'/><path d='M72 84c22-14 42-12 48 4-14-8-30-6-44 2z'/><path d='M72 84c-26-6-48 4-60 26 16-14 36-20 58-22z'/></g></svg>"),url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 200'><g fill='%23070112'><path d='M58 200c2-40 4-80 12-118l6 1c-7 37-9 77-10 117z'/><path d='M72 84C55 60 30 55 4 66c22-4 44 2 62 22z'/><path d='M72 84c-6-26-24-44-50-50 20 10 34 28 42 52z'/><path d='M72 84c8-26 26-40 48-42-20 8-34 22-40 44z'/><path d='M72 84c22-14 42-12 48 4-14-8-30-6-44 2z'/><path d='M72 84c-26-6-48 4-60 26 16-14 36-20 58-22z'/></g></svg>");background-repeat:no-repeat;background-size:70px auto,56px auto;background-position:left 3% bottom 34px,right 4% bottom 40px}
+h1 span{background:var(--brand)!important;-webkit-background-clip:text!important;background-clip:text!important;-webkit-text-fill-color:transparent}
+h1{text-shadow:0 0 18px rgba(255,42,109,.55)}.total .big{text-shadow:0 0 18px rgba(255,42,109,.55)}
+.card{border-color:rgba(45,226,230,.22);box-shadow:0 0 0 1px rgba(45,226,230,.10),0 12px 30px rgba(0,0,0,.5)}.card:hover{box-shadow:0 0 0 1px #2de2e6,0 0 22px rgba(255,42,109,.30)}
+nav button.on{box-shadow:0 1px 12px rgba(45,226,230,.35)}
+@media(max-width:520px){.horizon{height:96px}.horizon::after{width:120px;height:60px}.p b{font-size:12px}.palms{background-size:48px auto,40px auto}}
 </style>
 </head>
 <body>
@@ -64,6 +73,7 @@ footer{max-width:1500px;margin:0 auto;padding:10px 16px 30px;color:var(--muted);
   <div class="total" id="total"></div>
   <div class="actions"><button id="scan">Scan wallets</button><span class="small" id="scanned"></span></div>
 </header>
+<div class="horizon"><div class="palms"></div></div>
 <nav><button data-tab="portfolio" class="on">Portfolio</button><button data-tab="analytics">Analytics</button><button data-tab="watchlist">Watchlist</button></nav>
 <main>
   <section id="tab-portfolio">
@@ -171,7 +181,7 @@ function renderPortfolio(){
   let V=0,C=0;
   holdings.forEach(c=>{
     const el=document.querySelector(`.card[data-k="${key(c)}"]`); if(!el) return; const p=prices[key(c)]??c.px??(hist[key(c)]||[[0,0]]).at(-1)[1];
-    const q=k=>el.querySelector(`[data-k="${k}"]`); q("price").textContent=fmtPrice(p); const mi=info[key(c)], mv=mi?(mi.marketCap||mi.fdv):0; q("mcap").textContent=mv?"M cap "+fmtMcap(mv):""; fillPeriods(el,c,p);
+    const q=k=>el.querySelector(`[data-k="${k}"]`); q("price").textContent=fmtPrice(p); const mi=info[key(c)], mv=mi?(mi.marketCap||mi.fdv):0; q("mcap").textContent=mv?"Mcap "+fmtMcap(mv):""; fillPeriods(el,c,p);
     const val=p*c.qty, pl=val-c.cost; V+=val; C+=c.cost;
     q("val").textContent=fmtUSD(val); q("cost").textContent=fmtUSD(c.cost); q("pl").textContent=(pl>=0?"+":"−")+fmtUSD(Math.abs(pl)); q("pl").className=cls(pl); q("ret").textContent=fmtPct(val/c.cost-1);
     const avgb=c.cost/c.qty, avgs=c.soldQty>0?c.soldProceeds/c.soldQty:null;
@@ -216,10 +226,10 @@ async function buildAnalytics(){
     <ul class="read">${a.read.map(t=>`<li>${t}</li>`).join("")}${a.note?`<li class="small">${a.note}</li>`:""}</ul>`;
     box.appendChild(el);
     const pts=f=>r.map(x=>[x.d,f(x)]);
-    chart(el.querySelector('[data-c="price"]'),[{name:"Price",color:"#e9c662",pts:pts(x=>x.close)}],{id:"ap"+c.name,fmt:v=>"$"+(v>=10?v.toFixed(0):v>=1?v.toFixed(2):v.toPrecision(2))});
-    chart(el.querySelector('[data-c="grp"]'),[{name:"Whale",color:"#e9c662",pts:pts(x=>x.whale),fill:.18},{name:"Medium",color:"#8fb2ff",pts:pts(x=>x.medium),fill:.12},{name:"Small",color:"#4fd08a",pts:pts(x=>x.small),fill:.1},{name:"New",color:"#ff9bd0",pts:pts(x=>x.new),fill:0}],{id:"ag"+c.name,fmt:v=>v.toFixed(1)+"%",zero:true});
-    chart(el.querySelector('[data-c="vol"]'),[{name:"Buys",color:"#4fd08a",pts:pts(x=>x.buy),fill:.2},{name:"Sells",color:"#ff7a7a",pts:pts(x=>x.sell),fill:.2}],{id:"av"+c.name,fmt:v=>"$"+short(v),zero:true});
-    chart(el.querySelector('[data-c="hold"]'),[{name:"Holders",color:"#8fb2ff",pts:pts(x=>x.holders)}],{id:"ah"+c.name});
+    chart(el.querySelector('[data-c="price"]'),[{name:"Price",color:"#2de2e6",pts:pts(x=>x.close)}],{id:"ap"+c.name,fmt:v=>"$"+(v>=10?v.toFixed(0):v>=1?v.toFixed(2):v.toPrecision(2))});
+    chart(el.querySelector('[data-c="grp"]'),[{name:"Whale",color:"#2de2e6",pts:pts(x=>x.whale),fill:.18},{name:"Medium",color:"#ff6ac1",pts:pts(x=>x.medium),fill:.12},{name:"Small",color:"#4ae8b0",pts:pts(x=>x.small),fill:.1},{name:"New",color:"#ffd23f",pts:pts(x=>x.new),fill:0}],{id:"ag"+c.name,fmt:v=>v.toFixed(1)+"%",zero:true});
+    chart(el.querySelector('[data-c="vol"]'),[{name:"Buys",color:"#4ae8b0",pts:pts(x=>x.buy),fill:.2},{name:"Sells",color:"#ff4d5e",pts:pts(x=>x.sell),fill:.2}],{id:"av"+c.name,fmt:v=>"$"+short(v),zero:true});
+    chart(el.querySelector('[data-c="hold"]'),[{name:"Holders",color:"#ff6ac1",pts:pts(x=>x.holders)}],{id:"ah"+c.name});
   });
 }
 
