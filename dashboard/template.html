@@ -324,20 +324,25 @@ const GNET={arc:"arc",robinhood:"robinhood",ethereum:"eth"};
 const pxFmt=v=>v>=1000?Math.round(v).toLocaleString("en-US"):v>=1?v.toFixed(2):v>=0.01?v.toFixed(4):v.toPrecision(3);
 function mchartHTML(k,chain,pair){ return `<div class="mchart" data-mk="${k}" data-net="${GNET[chain]||chain}" data-pair="${pair||""}"><div class="rng"><span class="rb">${TFS.map(([l],i)=>`<button data-tf="${i}"${i===2?' class="on"':""}>${l}</button>`).join("")}</span>${pair?`<a href="https://dexscreener.com/${chain}/${pair}" target="_blank" rel="noopener">Full ↗</a>`:""}</div><div class="mc"></div></div>`; }
 const gq=[]; let gbusy=false;
-function gfetch(net,pair,i){ return new Promise((res,rej)=>{ gq.push({net,pair,i,res,rej}); pumpG(); }); }
+function gfetch(net,pair,i,fresh){ return new Promise((res,rej)=>{ gq.push({net,pair,i,res,rej,fresh}); pumpG(); }); }
+function fillGaps(l,step){ if(!l.length) return l; const end=l.at(-1).time, start=end-499*step, m=new Map(l.map(x=>[x.time,x])); let prev=null; for(const x of l){ if(x.time<start) prev=x.close; else break; } if(prev==null) prev=l[0].open; const out=[]; for(let t=start;t<=end;t+=step){ const x=m.get(t); if(x){ out.push(x); prev=x.close; } else out.push({time:t,open:prev,high:prev,low:prev,close:prev,v:0}); } return out; }
 async function pumpG(){ if(gbusy||!gq.length) return; gbusy=true; const t=gq.shift(), [,unit,agg]=TFS[t.i], ck="oh:"+t.net+t.pair+t.i, c=store.get(ck,null);
-  try{ if(c&&Date.now()-c.t<60000) t.res(c.d); else { const r=await fetch(`https://api.geckoterminal.com/api/v2/networks/${t.net}/pools/${t.pair}/ohlcv/${unit}?aggregate=${agg}&limit=300`,{headers:{accept:"application/json"}}); if(!r.ok) throw new Error(r.status); const l=(await r.json()).data.attributes.ohlcv_list.map(x=>({time:x[0],open:x[1],high:x[2],low:x[3],close:x[4],v:x[5]})).sort((a,b)=>a.time-b.time); store.set(ck,{t:Date.now(),d:l}); t.res(l); } }
+  try{ if(c&&!t.fresh&&Date.now()-c.t<60000) t.res(c.d); else { const r=await fetch(`https://api.geckoterminal.com/api/v2/networks/${t.net}/pools/${t.pair}/ohlcv/${unit}?aggregate=${agg}&limit=1000`,{headers:{accept:"application/json"}}); if(!r.ok) throw new Error(r.status); const l=(await r.json()).data.attributes.ohlcv_list.map(x=>({time:x[0],open:x[1],high:x[2],low:x[3],close:x[4],v:x[5]})).sort((a,b)=>a.time-b.time); const f=fillGaps(l,(unit==='minute'?60:unit==='hour'?3600:86400)*agg); store.set(ck,{t:Date.now(),d:f}); t.res(f); } }
   catch(e){ t.rej(e); } setTimeout(()=>{ gbusy=false; pumpG(); },1500); }
 const mc={}; // per card chart objects
-async function loadM(el,i){ const k=el.dataset.mk, box=el.querySelector(".mc"), pair=el.dataset.pair; if(!pair||typeof LightweightCharts==="undefined"){ box.innerHTML='<div class="small" style="padding:30px 0;text-align:center">No chart for this coin.</div>'; return; }
+async function loadM(el,i,quiet){ const k=el.dataset.mk, box=el.querySelector(".mc"), pair=el.dataset.pair; if(!pair||typeof LightweightCharts==="undefined"){ box.innerHTML='<div class="small" style="padding:30px 0;text-align:center">No chart for this coin.</div>'; return; }
   let o=mc[k]; if(!o){ box.innerHTML=""; const ch=LightweightCharts.createChart(box,{width:box.clientWidth||340,height:300,layout:{background:{color:"transparent"},textColor:"#bea6dd",fontFamily:"Exo 2"},grid:{vertLines:{color:"#2a1450"},horzLines:{color:"#2a1450"}},rightPriceScale:{borderColor:"#3a1866"},timeScale:{borderColor:"#3a1866",timeVisible:true,secondsVisible:false},crosshair:{mode:0},localization:{priceFormatter:pxFmt}});
     const cs=ch.addCandlestickSeries({upColor:"#4ae8b0",downColor:"#ff4d5e",borderVisible:false,wickUpColor:"#4ae8b0",wickDownColor:"#ff4d5e",priceFormat:{type:"custom",formatter:pxFmt,minMove:1e-10}});
-    const vs=ch.addHistogramSeries({priceFormat:{type:"volume"},priceScaleId:"",color:"#3a1866"}); vs.priceScale().applyOptions({scaleMargins:{top:.82,bottom:0}});
-    o=mc[k]={ch,cs,vs,box}; }
-  const seq=o.seq=(o.seq||0)+1; el.querySelectorAll("[data-tf]").forEach(b=>b.classList.toggle("on",+b.dataset.tf===i)); o.box.dataset.msg="";
-  try{ const d=await gfetch(el.dataset.net,pair,i); if(o.seq!==seq) return; o.cs.setData(d); o.vs.setData(d.map(x=>({time:x.time,value:x.v,color:x.close>=x.open?"rgba(74,232,176,.35)":"rgba(255,77,94,.35)"}))); o.ch.timeScale().fitContent(); }
-  catch(e){ if(o.seq===seq){ o.box.insertAdjacentHTML("beforeend",'<div class="small" style="padding:8px 0;text-align:center">Candles unavailable right now, tap a timeframe to retry.</div>'); } } }
-const mobs=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting&&!e.target.dataset.go){ e.target.dataset.go="1"; loadM(e.target,2); } }),{rootMargin:"400px 0px"});
+    const vs=ch.addHistogramSeries({priceFormat:{type:"volume"},priceScaleId:"",color:"#3a1866",lastValueVisible:false,priceLineVisible:false}); vs.priceScale().applyOptions({scaleMargins:{top:.82,bottom:0}});
+    o=mc[k]={ch,cs,vs,box,i}; }
+  const seq=o.seq=(o.seq||0)+1, switched=o.i!==i||!o.loaded; o.i=i; el.querySelectorAll("[data-tf]").forEach(b=>b.classList.toggle("on",+b.dataset.tf===i));
+  for(let attempt=0;attempt<2;attempt++){
+    try{ const d=await gfetch(el.dataset.net,pair,i,!!quiet); if(o.seq!==seq) return; o.cs.setData(d); o.vs.setData(d.map(x=>({time:x.time,value:x.v,color:x.close>=x.open?"rgba(74,232,176,.35)":"rgba(255,77,94,.35)"}))); if(switched) o.ch.timeScale().fitContent(); o.loaded=true; el.querySelectorAll(".cerr").forEach(x=>x.remove()); return; }
+    catch(e){ if(o.seq!==seq) return; await new Promise(r=>setTimeout(r,2500)); } }
+  if(!el.querySelector(".cerr")) box.insertAdjacentHTML("afterend",'<div class="small cerr" style="padding:6px 0;text-align:center">Couldn\'t load candles just now. Tap a timeframe to retry.</div>'); }
+const vis=new Set();
+setInterval(()=>{ if(document.hidden||!matchMedia("(max-width:820px)").matches) return; vis.forEach(el=>{ const o=mc[el.dataset.mk]; if(o&&o.loaded) loadM(el,o.i,true); }); },60000);
+const mobs=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting){ vis.add(e.target); if(!e.target.dataset.go){ e.target.dataset.go="1"; loadM(e.target,2); } } else vis.delete(e.target); }),{rootMargin:"200px 0px"});
 function drawAllM(){ if(!matchMedia("(max-width:820px)").matches) return;
   document.querySelectorAll(".mchart").forEach(el=>{ if(!el.dataset.bound){ el.dataset.bound="1"; el.querySelectorAll("[data-tf]").forEach(b=>b.onclick=()=>loadM(el,+b.dataset.tf)); mobs.observe(el); } const o=mc[el.dataset.mk]; if(o) o.ch.applyOptions({width:el.querySelector(".mc").clientWidth}); }); }
 addEventListener("resize",drawAllM);
