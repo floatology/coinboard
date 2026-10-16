@@ -1,7 +1,6 @@
 // Scans the owner's wallets on Arc and Robinhood Chain and updates holdings, buy and sell averages.
 // Stateless: it starts from the baseline (holdings as of a block, written at build time in _config.json) and replays every
 // ERC-20 transfer touching the wallets since then, then checks the result against on-chain balances.
-const CFG = require("./_config.json");
 const TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
 const pad = a => "0x" + "0".repeat(24) + a.toLowerCase().slice(2);
 const lc = s => (s || "").toLowerCase();
@@ -118,15 +117,20 @@ async function scanChain(key, ch, notes) {
   return { head, hold: Object.values(hold) };
 }
 
+async function scanAll(cfg) {
+  const notes = [], holdings = [], closed = [], heads = {};
+  const keys = Object.keys(cfg.chains);
+  const results = await Promise.all(keys.map(k => scanChain(k, cfg.chains[k], notes)));
+  results.forEach((r, i) => {
+    heads[keys[i]] = r.head;
+    for (const h of r.hold) (h.qty * 1 > 1e-9 ? holdings : closed).push(h);
+  });
+  return { scannedAt: Math.floor(Date.now() / 1000), heads, holdings, closed, notes };
+}
+
 module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
-  try {
-    const notes = [], holdings = [], closed = [], heads = {};
-    const results = await Promise.all(Object.entries(CFG.chains).map(([k, ch]) => scanChain(k, ch, notes)));
-    results.forEach((r, i) => {
-      const k = Object.keys(CFG.chains)[i]; heads[k] = r.head;
-      for (const h of r.hold) (h.qty * 1 > 1e-9 ? holdings : closed).push(h);
-    });
-    res.status(200).json({ scannedAt: Math.floor(Date.now() / 1000), heads, holdings, closed, notes });
-  } catch (e) { res.status(500).json({ error: String(e && e.message || e) }); }
+  try { res.status(200).json(await scanAll(require("./_config.json"))); }
+  catch (e) { res.status(500).json({ error: String(e && e.message || e) }); }
 };
+module.exports.scanAll = scanAll;

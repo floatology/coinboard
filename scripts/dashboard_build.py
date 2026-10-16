@@ -13,7 +13,9 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 
@@ -65,6 +67,63 @@ def onchain(url: str, token: str, wallets: list[str], dec: int) -> float:
     for w in wallets:
         tot += int(rpc(url, "eth_call", [{"to": token, "data": "0x70a08231" + "0" * 24 + w[2:].lower()}, "latest"]), 16)
     return tot / 10 ** dec
+
+
+def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float) -> tuple[list[dict], list[dict]]:
+    """Replay the wallets since the positions file's baseline (scripts/advance_baseline.js, the Scan button's code) and move
+    the baseline to the current block. Returns the holdings to show: replayed quantities, costs and sold stats; coins bought
+    since then are added (if DexScreener lists them and they are worth at least $0.50), coins sold out move to `closed`.
+    If the replay fails, the positions file is used as it is and the page's Scan covers the gap."""
+    env = dict(os.environ)
+    if env.get("HTTPS_PROXY"):                       # local runs behind the session proxy; CI has no proxy
+        env.setdefault("NODE_USE_ENV_PROXY", "1")
+        if Path("/root/.ccr/ca-bundle.crt").exists():
+            env.setdefault("NODE_EXTRA_CA_CERTS", "/root/.ccr/ca-bundle.crt")
+    backup = cfg_file.read_text()
+    try:
+        r = subprocess.run(["node", str(ROOT / "scripts/advance_baseline.js"), str(cfg_file)], capture_output=True, text=True,
+                           timeout=900, env=env, check=True)
+        res = json.loads(r.stdout)
+    except Exception as e:
+        cfg_file.write_text(backup)
+        err = getattr(e, "stderr", "") or str(e)
+        print(f"warning: wallet replay failed, showing the positions file as it is ({err.strip()[:200]})")
+        return coins, closed
+    for n in res.get("notes", []):
+        print("replay note:", n)
+    by = {(c["chain"], c["token"].lower()): c for c in coins}
+    shown, gone = [], []
+    for h in res["holdings"]:
+        k = (h["chain"], h["token"].lower())
+        c = by.get(k)
+        if c is None:                                 # bought since the baseline
+            try:
+                r2 = httpx.get(f"https://api.dexscreener.com/latest/dex/tokens/{h['token']}", timeout=30).json()["pairs"] or []
+                ps = [p for p in r2 if p["chainId"] == h["chain"] and p["baseToken"]["address"].lower() == h["token"].lower() and p.get("liquidity")]
+                best = max(ps, key=lambda p: p["liquidity"]["usd"]) if ps else None
+            except Exception:
+                best = None
+            if not best or h["qty"] * float(best["priceUsd"] or 0) < 0.5:
+                continue                              # unlisted or dust: hidden, as on the page
+            c = {"name": h["symbol"], "symbol": h["symbol"], "chain": h["chain"], "token": h["token"], "pair": best["pairAddress"],
+                 "hist": [], "bought": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(now))}
+            print(f"replay: new holding {h['symbol']} {h['qty']:,.4f}")
+        c = {**c, "qty": h["qty"], "cost": round(h["cost"], 2), "soldQty": h["soldQty"], "soldProceeds": h["soldProceeds"],
+             "realised": round(h["realised"], 2), "dec": h["dec"]}
+        shown.append(c)
+    order = {(c["chain"], c["token"].lower()): i for i, c in enumerate(coins)}
+    shown.sort(key=lambda c: order.get((c["chain"], c["token"].lower()), len(order)))
+    held = {(c["chain"], c["token"].lower()) for c in shown}
+    for c in coins:
+        if (c["chain"], c["token"].lower()) not in held:
+            gone.append(c["name"])
+    closed2 = [{"name": h["symbol"], "symbol": h["symbol"], "chain": h["chain"], "token": h["token"], "qty": 0, "cost": 0,
+                "soldQty": h["soldQty"], "soldProceeds": h["soldProceeds"], "realised": round(h["realised"], 2), "dec": h["dec"]}
+               for h in res["closed"] if h.get("soldQty", 0) > 0]
+    if gone:
+        print("replay: no longer held:", ", ".join(gone))
+    print(f"replay: baseline moved to " + ", ".join(f"{k} block {v:,}" for k, v in res["heads"].items()))
+    return shown, closed2
 
 
 def main() -> int:
@@ -119,7 +178,7 @@ def main() -> int:
     out = a.out
     (out / "api").mkdir(parents=True, exist_ok=True)
     (out / "api/_config.json").write_text(json.dumps(api))
-    shutil.copy(ROOT / "dashboard/lwc.js", out / "lwc.js")
+    coins, closed = advance(out / "api/_config.json", coins, closed, now)
     for f in ("scan.js", "refresh.js"):
         shutil.copy(ROOT / "dashboard/api" / f, out / "api" / f)
     (out / "vercel.json").write_text(json.dumps({

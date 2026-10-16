@@ -30,7 +30,7 @@ main{max-width:1500px;margin:0 auto;padding:14px 16px 10px}
 .top{padding:14px 16px 12px}
 .row1{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
 .name{font:700 21px/1 var(--display);color:var(--head)}.name small{font:500 12px var(--ui);color:var(--muted);margin-left:8px;letter-spacing:.4px;text-transform:uppercase}
-.price{font-weight:600;font-size:18px}.pr{display:flex;align-items:baseline;gap:10px}.mcap{color:var(--muted);font-size:13px;font-weight:500}
+.price{font-weight:600;font-size:18px}.pr{display:flex;align-items:baseline;gap:10px}.mcap{color:var(--muted);font-size:13px;font-weight:500;white-space:nowrap}@media(max-width:520px){.pr{flex-direction:column-reverse;align-items:flex-end;gap:2px}.mcap{font-size:11px}}
 .periods{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:12px 0}@media(max-width:520px){.periods{gap:4px}.periods>*{padding-left:2px!important;padding-right:2px!important;font-size:12px}}
 .p{background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:6px 4px;text-align:center}.p b{display:block;font-size:11px;font-weight:500;color:var(--muted)}.p span{display:block;font-weight:600;font-size:14px;margin-top:2px}
 .roi{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
@@ -76,11 +76,8 @@ nav button.on{box-shadow:0 1px 12px rgba(45,226,230,.35)}
 h1.logo{margin:0;line-height:0;text-shadow:none}h1.logo img{height:62px;width:auto;display:block;filter:drop-shadow(0 0 10px rgba(255,79,139,.45))}
 @media(max-width:520px){h1.logo img{height:46px}}
 h1.logo img{height:62px}@media(max-width:520px){h1.logo img{height:36px}}
-.mchart{display:none;padding:8px 12px 12px;border-top:1px solid var(--line);background:#0d0221}
-.mchart .rng{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}.mchart .rb{display:flex;gap:6px}
-.mchart .rng button{background:var(--chip);border:1px solid var(--line);color:var(--muted);padding:5px 8px;border-radius:8px;font:600 12px var(--ui)}.mchart .rb{gap:4px}.mchart a{white-space:nowrap}.mchart .rng button.on{background:var(--gold);color:#2b1000;border-color:transparent}.mchart .mc{min-height:300px}.mchart .rb{flex-wrap:wrap}
-.mchart a{color:var(--accent);font-size:12px;text-decoration:none}
-@media(max-width:820px){.chart.dx{display:none}.mchart{display:block}}
+@media(max-width:820px){.chart{height:400px}}
+.chart .ph{height:100%;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px}
 .glance{display:none}
 @media(max-width:820px){.glance{display:block;background:var(--card);border:1px solid rgba(45,226,230,.22);border-radius:12px;padding:6px 10px;margin:0 0 12px}
 .glance .gr{display:grid;grid-template-columns:1.25fr repeat(4,1fr);gap:4px;align-items:center;padding:3px 0;font-size:12px;line-height:1.2}
@@ -111,7 +108,6 @@ h1.logo img{height:62px}@media(max-width:520px){h1.logo img{height:36px}}
 </main>
 <footer id="foot"></footer>
 <div class="tip" id="tip"></div>
-<script src="lwc.js"></script>
 <script>
 const DATA = __DATA__;
 const $ = s => document.querySelector(s);
@@ -128,7 +124,7 @@ const store = {get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{
 /* ---------- state ---------- */
 let holdings = DATA.coins.map(c=>({...c}));
 let closed = DATA.closed.slice();
-const saved = store.get("scan",null); if(saved && saved.holdings){ holdings = saved.holdings; closed = saved.closed; }
+const saved = store.get("scan",null); if(saved && saved.holdings && saved.at > DATA.built){ const b=new Map(DATA.coins.map(c=>[c.chain+":"+c.token.toLowerCase(),c])); holdings = saved.holdings.map(h=>{ const d=b.get(h.chain+":"+h.token.toLowerCase()); return d?{...h,hist:d.hist,pair:d.pair,bought:d.bought??h.bought}:h; }); closed = saved.closed; }
 const prices = {}, hist = {}, info = {};      // by token key
 const key = c => c.chain+":"+c.token.toLowerCase();
 holdings.forEach(c=>{ if(c.hist) hist[key(c)] = c.hist; });
@@ -160,7 +156,7 @@ function chart(el, series, o={}){
 
 /* ---------- data sources ---------- */
 async function dexToken(chain, token){
-  const r=await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`); const j=await r.json();
+  const r=await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`,{signal:AbortSignal.timeout(15000)}); const j=await r.json();
   const ps=(j.pairs||[]).filter(p=>p.chainId===chain && p.baseToken.address.toLowerCase()===token.toLowerCase() && p.liquidity).sort((a,b)=>b.liquidity.usd-a.liquidity.usd);
   return ps[0]||null;
 }
@@ -171,7 +167,7 @@ function geckoHist(c){   // hourly closes, 200 candles; queued 2.2 s apart (free
   geckoQ = geckoQ.then(async()=>{
     try{
       const net=GECKO[c.chain]||c.chain;
-      const r=await fetch(`https://api.geckoterminal.com/api/v2/networks/${net}/pools/${c.pair}/ohlcv/hour?aggregate=1&limit=200`); const j=await r.json();
+      const r=await fetch(`https://api.geckoterminal.com/api/v2/networks/${net}/pools/${c.pair}/ohlcv/hour?aggregate=1&limit=200`,{signal:AbortSignal.timeout(15000)}); const j=await r.json();
       const l=j.data.attributes.ohlcv_list; if(l&&l.length){ hist[k]=l.map(x=>[x[0],x[4]]).sort((a,b)=>a[0]-b[0]); store.set("gh:"+k,{t:Date.now(),h:hist[k]}); render(); }
     }catch(e){}
     await new Promise(r=>setTimeout(r,2200));
@@ -179,9 +175,12 @@ function geckoHist(c){   // hourly closes, 200 candles; queued 2.2 s apart (free
   return geckoQ;
 }
 function refPrice(c,h){ const H=hist[key(c)]; if(!H||!H.length) return null; const t=Date.now()/1000-h*3600; if(H[0][0]>t+3600*2 && h>1) return null; let v=H[0][1]; for(const [ts,pr] of H){ if(ts<=t) v=pr; else break; } return v; }
+function periodReturn(c,h,p){ const pc=info[key(c)]?.priceChange, f={1:"h1",6:"h6",24:"h24"}[h];
+  if(pc&&f&&pc[f]!=null&&isFinite(pc[f])) return pc[f]/100;
+  const ref=refPrice(c,h); return ref&&p?p/ref-1:null; }
 function periodsHTML(c){ return HOURS.map(([l])=>`<div class="p"><b>${l}</b><span data-k="p${l}"></span></div>`).join(""); }
 function fillPeriods(el,c,p){
-  HOURS.forEach(([l,h])=>{ const ref=refPrice(c,h), r=ref?p/ref-1:null, early=c.bought&&(Date.now()/1000-h*3600)<Date.parse(c.bought)/1000;
+  HOURS.forEach(([l,h])=>{ const r=periodReturn(c,h,p), early=c.bought&&(Date.now()/1000-h*3600)<Date.parse(c.bought)/1000;
     const s=el.querySelector(`[data-k="p${l}"]`); if(!s) return; s.textContent=fmtPct(r)+(early?"*":""); s.className=cls(r); });
 }
 const embed = c => `https://dexscreener.com/${c.chain}/${c.pair}?embed=1&theme=dark&trades=0&info=0&chartLeftToolbar=0&chartTheme=dark&interval=15`;
@@ -195,13 +194,13 @@ function buildPortfolio(){
     <div class="periods">${periodsHTML(c)}</div>
     <div class="roi"><div class="r"><b>Value</b><span data-k="val"></span></div><div class="r"><b>Cost</b><span data-k="cost"></span></div><div class="r"><b>Profit / loss</b><span data-k="pl"></span></div><div class="r main"><b>Return</b><span data-k="ret"></span></div></div>
     <div class="avg" data-k="avg"></div></div>
-    <div class="chart dx">${c.pair?`<iframe data-src="${embed(c)}" title="chart"></iframe>`:""}</div>${mchartHTML(key(c),c.chain,c.pair)}`;
+    <div class="chart dx">${c.pair?`<iframe data-src="${embed(c)}" title="chart"></iframe>`:""}</div>`;
     grid.appendChild(el);
   });
 }
 function renderGlance(){ const G=[["1h",1],["6h",6],["12h",12],["24h",24]], g=$("#glance"); if(!g) return;
   g.innerHTML=`<div class="gr gh"><b></b>${G.map(([l])=>`<span>${l}</span>`).join("")}</div>`+holdings.map(c=>{ const p=prices[key(c)]??c.px??(hist[key(c)]||[[0,0]]).at(-1)[1];
-    return `<div class="gr"><b>${c.symbol||c.name}</b>${G.map(([l,h])=>{ const ref=refPrice(c,h), r=ref&&p?p/ref-1:null, early=c.bought&&(Date.now()/1000-h*3600)<Date.parse(c.bought)/1000; return `<span class="${cls(r)}">${fmtPct(r)}${early&&r!=null?"*":""}</span>`; }).join("")}</div>`; }).join(""); }
+    return `<div class="gr"><b>${c.symbol||c.name}</b>${G.map(([l,h])=>{ const r=periodReturn(c,h,p), early=c.bought&&(Date.now()/1000-h*3600)<Date.parse(c.bought)/1000; return `<span class="${cls(r)}">${fmtPct(r)}${early&&r!=null?"*":""}</span>`; }).join("")}</div>`; }).join(""); }
 function renderPortfolio(){
   let V=0,C=0;
   holdings.forEach(c=>{
@@ -219,11 +218,11 @@ function renderPortfolio(){
 
 /* ---------- market reference: Bitcoin and Ethereum ---------- */
 const MKT=[{id:"bitcoin",name:"Bitcoin",sym:"BTC",pair:"0x56534741CD8B152df6d48AdF7ac51f75169A83b2"},{id:"ethereum",name:"Ethereum",sym:"ETH",pair:"0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36"}]; const mk={}; for(const m of MKT) if(DATA.mkt&&DATA.mkt[m.id]) mk[m.id]=DATA.mkt[m.id];
-function buildMarket(){  $("#market").innerHTML=MKT.map(m=>`<section class="card ref" id="m-${m.id}"><div class="top"><div class="row1"><div class="name">${m.name}<small>${m.sym}</small></div><div class="price" data-k="price"></div></div><div class="periods">${periodsHTML(m)}</div></div><div class="chart dx"><iframe data-src="${embed({chain:"ethereum",pair:m.pair})}" title="chart"></iframe></div>${mchartHTML(m.id,"ethereum",m.pair)}</section>`).join(""); }
+function buildMarket(){  $("#market").innerHTML=MKT.map(m=>`<section class="card ref" id="m-${m.id}"><div class="top"><div class="row1"><div class="name">${m.name}<small>${m.sym}</small></div><div class="price" data-k="price"></div></div><div class="periods">${periodsHTML(m)}</div></div><div class="chart dx"><iframe data-src="${embed({chain:"ethereum",pair:m.pair})}" title="chart"></iframe></div></section>`).join(""); }
 async function loadMarket(){
   for(const m of MKT){
     try{ const c=store.get("mk:"+m.id,null); let d;
-      if(c&&Date.now()-c.t<240000) d=c.d; else { const r=await fetch(`https://api.coingecko.com/api/v3/coins/${m.id}/market_chart?vs_currency=usd&days=8`); d=(await r.json()).prices.map(x=>[Math.floor(x[0]/1000),x[1]]); store.set("mk:"+m.id,{t:Date.now(),d}); }
+      if(c&&Date.now()-c.t<240000) d=c.d; else { const r=await fetch(`https://api.coingecko.com/api/v3/coins/${m.id}/market_chart?vs_currency=usd&days=8`,{signal:AbortSignal.timeout(15000)}); d=(await r.json()).prices.map(x=>[Math.floor(x[0]/1000),x[1]]); store.set("mk:"+m.id,{t:Date.now(),d}); }
       mk[m.id]=d; }catch(e){}
     renderMarket();
   }
@@ -267,7 +266,7 @@ function buildWatch(){
     const el=document.createElement("section"); el.className="card"; el.dataset.k=key(c);
     el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol}<small>${c.chain}</small></div><div><span class="price" data-k="price"></span><button class="x" data-rm="${key(c)}" title="Remove">×</button></div></div>
     <div class="periods">${periodsHTML(c)}</div><div class="roi"><div class="r"><b>Market cap</b><span data-k="mc"></span></div><div class="r"><b>Liquidity</b><span data-k="liq"></span></div><div class="r"><b>24h volume</b><span data-k="vol"></span></div><div class="r main"><b>24h</b><span data-k="d24"></span></div></div></div>
-    <div class="chart dx"><iframe data-src="${embed(c)}" title="chart"></iframe></div>${mchartHTML(key(c),c.chain,c.pair)}`;
+    <div class="chart dx"><iframe data-src="${embed(c)}" title="chart"></iframe></div>`;
     g.appendChild(el); geckoHist(c);
   });
   g.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{ watch=watch.filter(c=>key(c)!==b.dataset.rm); store.set("watch",watch); buildWatch(); renderWatch(); });
@@ -291,17 +290,18 @@ async function doSearch(){
 async function scan(){
   const b=$("#scan"); b.disabled=true; b.textContent="Scanning…"; $("#scanlog").textContent="Reading your wallets on Arc and Robinhood Chain (about 20 seconds)…";
   try{
-    const r=await fetch("/api/scan",{method:"POST"}); const j=await r.json(); if(j.error) throw new Error(j.error);
+    const r=await fetch("api/scan",{method:"POST",signal:AbortSignal.timeout(70000)}); const j=await r.json(); if(j.error) throw new Error(j.error);
     const had=new Map(holdings.map(c=>[key(c),c])); const out=[];
     for(const h of j.holdings){
       const k=h.chain+":"+h.token; const pair=await dexToken(h.chain,h.token).catch(()=>null);
       if(!pair || h.qty*parseFloat(pair.priceUsd)<0.5){ continue; }          // unlisted or dust: hidden
       const old=had.get(k); out.push({name:h.symbol,symbol:h.symbol,chain:h.chain,token:h.token,qty:h.qty,cost:h.cost,soldQty:h.soldQty,soldProceeds:h.soldProceeds,realised:h.realised,pair:old?.pair||pair.pairAddress,bought:old?.bought,hist:old?.hist,px:parseFloat(pair.priceUsd)});
     }
+    const ord=[...had.keys()]; out.sort((a,b)=>{ const i=ord.indexOf(key(a)), j=ord.indexOf(key(b)); return (i<0?99:i)-(j<0?99:j); });
     const names=a=>a.map(c=>c.symbol).join(", ")||"none"; const added=out.filter(c=>!had.has(key(c))), gone=[...had.values()].filter(c=>!out.find(o=>key(o)===key(c)));
     const changed=out.filter(c=>had.has(key(c)) && (Math.abs(had.get(key(c)).qty-c.qty)>1e-6*Math.max(1,c.qty) || Math.abs(had.get(key(c)).cost-c.cost)>0.01));
     holdings=out; closed=j.closed.map(x=>({...x,name:x.symbol})); store.set("scan",{holdings,closed,at:j.scannedAt});
-    out.forEach(c=>{ prices[key(c)]=c.px; }); buildPortfolio(); holdings.forEach(geckoHist); render(); AN=AN; buildAnalytics();
+    out.forEach(c=>{ prices[key(c)]=c.px; }); buildPortfolio(); holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); render(); AN=AN; buildAnalytics();
     $("#scanlog").innerHTML=`Scan done: <b>${added.length}</b> new (${names(added)}), <b>${gone.length}</b> removed (${names(gone)}), <b>${changed.length}</b> changed (${names(changed)}).`+(j.notes&&j.notes.length?`<br>`+j.notes.map(n=>n.replace(/0x[0-9a-f]{40}/g,s=>s.slice(0,8)+"…")).join("<br>"):"");
     $("#scanned").textContent="Scanned "+new Date(j.scannedAt*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
   }catch(e){ $("#scanlog").textContent="Scan failed: "+e.message; }
@@ -309,7 +309,7 @@ async function scan(){
 }
 
 /* ---------- wiring ---------- */
-function render(){ renderPortfolio(); renderWatch(); renderMarket(); drawAllM();
+function render(){ renderPortfolio(); renderWatch(); renderMarket();
   $("#foot").textContent=`Prices live from DexScreener every 30 s; hourly history from GeckoTerminal; holdings as of ${saved?.at?"your last scan":"the build ("+new Date(DATA.built*1000).toUTCString().slice(5,22)+" UTC)"}. * = held for less than that period (the coin’s move, not yours). Press Scan wallets after any buy or sell.`; }
 async function refresh(){
   await Promise.all([...holdings,...watch].map(async c=>{ try{ const p=await dexToken(c.chain,c.token); if(p){ prices[key(c)]=parseFloat(p.priceUsd); info[key(c)]=p; } }catch(e){} }));
@@ -326,46 +326,21 @@ $("#arefresh").onclick=async()=>{ const b=$("#arefresh"), m=$("#asof"); b.disabl
  $("#go").onclick=doSearch; $("#q").addEventListener("keydown",e=>{ if(e.key==="Enter") doSearch(); });
 if(saved?.at) $("#scanned").textContent="Scanned "+new Date(saved.at*1000).toLocaleString([], {day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
 
-/* ---------- chart frames: load the ones near the screen, two at a time; on phones unload the ones far away ---------- */
 
-/* ---------- phone charts: TradingView lightweight-charts candles from GeckoTerminal, timeframe chips ---------- */
-const TFS=[["1m","minute",1],["5m","minute",5],["15m","minute",15],["1h","hour",1],["4h","hour",4],["1D","day",1]];
-const GNET={arc:"arc",robinhood:"robinhood",ethereum:"eth"};
-const pxFmt=v=>v>=1000?Math.round(v).toLocaleString("en-US"):v>=1?v.toFixed(2):v>=0.01?v.toFixed(4):v.toPrecision(3);
-function mchartHTML(k,chain,pair){ return `<div class="mchart" data-mk="${k}" data-net="${GNET[chain]||chain}" data-pair="${pair||""}"><div class="rng"><span class="rb">${TFS.map(([l],i)=>`<button data-tf="${i}"${i===2?' class="on"':""}>${l}</button>`).join("")}</span>${pair?`<a href="https://dexscreener.com/${chain}/${pair}" target="_blank" rel="noopener">Full ↗</a>`:""}</div><div class="mc"></div></div>`; }
-const gq=[]; let gbusy=false;
-function gfetch(net,pair,i,fresh){ return new Promise((res,rej)=>{ gq.push({net,pair,i,res,rej,fresh}); pumpG(); }); }
-function fillGaps(l,step){ if(!l.length) return l; const end=l.at(-1).time, start=end-499*step, m=new Map(l.map(x=>[x.time,x])); let prev=null; for(const x of l){ if(x.time<start) prev=x.close; else break; } if(prev==null) prev=l[0].open; const out=[]; for(let t=start;t<=end;t+=step){ const x=m.get(t); if(x){ out.push(x); prev=x.close; } else out.push({time:t,open:prev,high:prev,low:prev,close:prev,v:0}); } return out; }
-async function pumpG(){ if(gbusy||!gq.length) return; gbusy=true; const t=gq.shift(), [,unit,agg]=TFS[t.i], ck="oh:"+t.net+t.pair+t.i, c=store.get(ck,null);
-  try{ if(c&&!t.fresh&&Date.now()-c.t<60000) t.res(c.d); else { const r=await fetch(`https://api.geckoterminal.com/api/v2/networks/${t.net}/pools/${t.pair}/ohlcv/${unit}?aggregate=${agg}&limit=1000`,{headers:{accept:"application/json"}}); if(!r.ok) throw new Error(r.status); const l=(await r.json()).data.attributes.ohlcv_list.map(x=>({time:x[0],open:x[1],high:x[2],low:x[3],close:x[4],v:x[5]})).sort((a,b)=>a.time-b.time); const f=fillGaps(l,(unit==='minute'?60:unit==='hour'?3600:86400)*agg); store.set(ck,{t:Date.now(),d:f}); t.res(f); } }
-  catch(e){ t.rej(e); } setTimeout(()=>{ gbusy=false; pumpG(); },1500); }
-const mc={}; // per card chart objects
-async function loadM(el,i,quiet){ const k=el.dataset.mk, box=el.querySelector(".mc"), pair=el.dataset.pair; if(!pair||typeof LightweightCharts==="undefined"){ box.innerHTML='<div class="small" style="padding:30px 0;text-align:center">No chart for this coin.</div>'; return; }
-  let o=mc[k]; if(!o){ box.innerHTML=""; const ch=LightweightCharts.createChart(box,{width:box.clientWidth||340,height:300,layout:{background:{color:"transparent"},textColor:"#bea6dd",fontFamily:"Exo 2"},grid:{vertLines:{color:"#2a1450"},horzLines:{color:"#2a1450"}},rightPriceScale:{borderColor:"#3a1866"},timeScale:{borderColor:"#3a1866",timeVisible:true,secondsVisible:false},crosshair:{mode:0},localization:{priceFormatter:pxFmt}});
-    const cs=ch.addCandlestickSeries({upColor:"#4ae8b0",downColor:"#ff4d5e",borderVisible:false,wickUpColor:"#4ae8b0",wickDownColor:"#ff4d5e",priceFormat:{type:"custom",formatter:pxFmt,minMove:1e-10}});
-    const vs=ch.addHistogramSeries({priceFormat:{type:"volume"},priceScaleId:"",color:"#3a1866",lastValueVisible:false,priceLineVisible:false}); vs.priceScale().applyOptions({scaleMargins:{top:.82,bottom:0}});
-    o=mc[k]={ch,cs,vs,box,i}; }
-  const seq=o.seq=(o.seq||0)+1, switched=o.i!==i||!o.loaded; o.i=i; el.querySelectorAll("[data-tf]").forEach(b=>b.classList.toggle("on",+b.dataset.tf===i));
-  for(let attempt=0;attempt<2;attempt++){
-    try{ const d=await gfetch(el.dataset.net,pair,i,!!quiet); if(o.seq!==seq) return; o.cs.setData(d); o.vs.setData(d.map(x=>({time:x.time,value:x.v,color:x.close>=x.open?"rgba(74,232,176,.35)":"rgba(255,77,94,.35)"}))); if(switched) o.ch.timeScale().fitContent(); o.loaded=true; el.querySelectorAll(".cerr").forEach(x=>x.remove()); return; }
-    catch(e){ if(o.seq!==seq) return; await new Promise(r=>setTimeout(r,2500)); } }
-  if(!el.querySelector(".cerr")) box.insertAdjacentHTML("afterend",'<div class="small cerr" style="padding:6px 0;text-align:center">Couldn\'t load candles just now. Tap a timeframe to retry.</div>'); }
-const vis=new Set();
-setInterval(()=>{ if(document.hidden||!matchMedia("(max-width:820px)").matches) return; vis.forEach(el=>{ const o=mc[el.dataset.mk]; if(o&&o.loaded) loadM(el,o.i,true); }); },60000);
-const mobs=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting){ vis.add(e.target); if(!e.target.dataset.go){ e.target.dataset.go="1"; loadM(e.target,2); } } else vis.delete(e.target); }),{rootMargin:"200px 0px"});
-function drawAllM(){ if(!matchMedia("(max-width:820px)").matches) return;
-  document.querySelectorAll(".mchart").forEach(el=>{ if(!el.dataset.bound){ el.dataset.bound="1"; el.querySelectorAll("[data-tf]").forEach(b=>b.onclick=()=>loadM(el,+b.dataset.tf)); mobs.observe(el); } const o=mc[el.dataset.mk]; if(o) o.ch.applyOptions({width:el.querySelector(".mc").clientWidth}); }); }
-addEventListener("resize",drawAllM);
-const phone=matchMedia("(max-width:820px)"), fq=[]; let fbusy=0;
-function pumpFrames(){ while(fbusy<2&&fq.length){ const f=fq.shift(); if(!f.dataset.want||f.dataset.on||!f.offsetParent) continue; fbusy++; f.dataset.on="1"; let done=false; const fin=()=>{ if(done) return; done=true; fbusy--; pumpFrames(); }; f.onload=fin; setTimeout(fin,9000); f.src=f.dataset.src; } }
-const fobs=new IntersectionObserver(es=>es.forEach(e=>{ const f=e.target;
-  if(e.isIntersecting){ f.dataset.want="1"; if(!f.dataset.on&&!fq.includes(f)) fq.push(f); pumpFrames(); }
-  else { delete f.dataset.want; const i=fq.indexOf(f); if(i>=0) fq.splice(i,1); if(phone.matches&&f.dataset.on){ delete f.dataset.on; f.src="about:blank"; } } }),{rootMargin:"500px 0px"});
-const _bw=buildWatch, _bp=buildPortfolio; buildWatch=function(){ _bw(); watchFrames(); }; buildPortfolio=function(){ _bp(); watchFrames(); };
 
-function watchFrames(){ document.querySelectorAll("iframe[data-src]").forEach(f=>{ if(!f.dataset.seen){ f.dataset.seen="1"; fobs.observe(f); } }); }
-buildPortfolio(); buildMarket(); renderMarket(); buildWatch(); watchFrames(); render(); refresh(); setInterval(refresh,30000);
-holdings.forEach(geckoHist); loadMarket(); setInterval(loadMarket,300000);
+/* ---------- DexScreener chart frames ----------
+   Each DexScreener frame signs in to Firebase and opens a live database connection, and the frames on one page share that
+   state. Frames started while off screen (lazy loading, or loading ahead of the scroll) stall on "Loading pair..." and do not
+   recover; frames started while on screen load. So: start a frame only when it is at least half visible, and keep only the
+   most recently viewed few running (3 on phones, 6 on desktop); older ones are closed and restart when scrolled back to. */
+const MAXLIVE=matchMedia("(max-width:820px)").matches?3:6; let live=[];
+function stopFrame(f){ delete f.dataset.on; f.removeAttribute("src"); f.srcdoc='<body style="margin:0;background:#0d0221;color:#bea6dd;font:12px sans-serif;display:flex;align-items:center;justify-content:center;height:100vh">Chart paused, scroll to it to reload</body>'; }
+function startFrame(f){ live=live.filter(x=>x.isConnected&&x!==f); live.push(f); if(!f.dataset.on){ f.dataset.on="1"; f.removeAttribute("srcdoc"); f.src=f.dataset.src; } while(live.length>MAXLIVE) stopFrame(live.shift()); }
+const fobs=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting&&e.intersectionRatio>=0.5&&!document.hidden) startFrame(e.target); }),{threshold:[0,0.5,1]});
+const _bw=buildWatch, _bp=buildPortfolio, _bm=buildMarket; buildWatch=function(){ _bw(); watchFrames(); }; buildPortfolio=function(){ _bp(); watchFrames(); }; buildMarket=function(){ _bm(); watchFrames(); };
+function watchFrames(){ live=live.filter(f=>f.isConnected); document.querySelectorAll("iframe[data-src]").forEach(f=>{ if(!f.dataset.seen){ f.dataset.seen="1"; fobs.observe(f); } }); }
+buildPortfolio(); buildMarket(); renderMarket(); buildWatch(); render(); refresh(); setInterval(refresh,30000);
+holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); loadMarket(); setInterval(loadMarket,300000);
 </script>
 </body>
 </html>
