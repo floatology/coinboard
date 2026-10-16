@@ -11,6 +11,7 @@ against the live price. Run balances.py --refresh first for fresh ledgers, then 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import shutil
 import time
@@ -125,7 +126,8 @@ def main() -> int:
         "headers": [{"source": "/(.*)", "headers": [{"key": "X-Robots-Tag", "value": "noindex, nofollow"}, {"key": "Cache-Control", "value": "no-store"}]}]}))
     an = out / "analytics.json"
     an_data = json.loads(an.read_text()) if an.exists() else {"coins": {}}
-    html = ((ROOT / "dashboard/template.html").read_text().replace("__DATA__", json.dumps({"built": int(now), "coins": coins, "closed": closed, "mkt": mkt}))
+    logo = "data:image/png;base64," + base64.b64encode((ROOT / "dashboard/logo.png").read_bytes()).decode()
+    html = ((ROOT / "dashboard/template.html").read_text().replace("__LOGO__", logo).replace("__DATA__", json.dumps({"built": int(now), "coins": coins, "closed": closed, "mkt": mkt}))
             .replace("__ANALYTICS__", json.dumps(an_data)))
     (out / "index.html").write_text(html)
     print(f"wrote {out / 'index.html'} ({len(html) / 1024:.0f} KB), {len(coins)} coins, built {time.strftime('%H:%M UTC', time.gmtime(now))}")
