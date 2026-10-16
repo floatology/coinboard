@@ -1,0 +1,57 @@
+name: coinboard
+# Hourly: refresh the trade archives, rebuild the analytics and the page, deploy to the private Vercel project.
+# Also runs when you press "Refresh analytics" on the page (workflow_dispatch). Needs these repository secrets:
+#   POSITIONS_JSON  the owner's positions file (costs and quantities; never committed)
+#   VERCEL_TOKEN    Vercel token that can deploy the coinboard project
+#   VERCEL_PROJECT  the Vercel project name
+#   SEED_REPO, SEED_TOKEN  only for the first run (or if the cache is lost): where to fetch the starting archives from
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: coinboard
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -q httpx pydantic duckdb pyarrow python-dotenv numpy
+      - name: Restore archives
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: coinboard-data-${{ github.run_id }}
+          restore-keys: coinboard-data-
+      - name: Seed archives (first run only)
+        if: steps.cache.outputs.cache-matched-key == ''
+        env:
+          SEED_REPO: ${{ secrets.SEED_REPO }}
+          SEED_TOKEN: ${{ secrets.SEED_TOKEN }}
+        run: |
+          git clone -q --depth 1 --branch coinboard-seed "https://x-access-token:${SEED_TOKEN}@github.com/${SEED_REPO}.git" /tmp/seed
+          cat /tmp/seed/seed/part-* | tar -x
+          rm -rf /tmp/seed
+      - name: Refresh, analyse, build, deploy
+        env:
+          POSITIONS_JSON: ${{ secrets.POSITIONS_JSON }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT: ${{ secrets.VERCEL_PROJECT }}
+        run: |
+          printf '%s' "$POSITIONS_JSON" > /tmp/positions.json
+          .venv/bin/python scripts/coinboard_ci.py --positions /tmp/positions.json
+      - name: Save archives
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: coinboard-data-${{ github.run_id }}

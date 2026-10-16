@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Coin Board</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230b1222'/%3E%3Cpath d='M12 44 24 30l9 7 19-21' fill='none' stroke='%23e9c662' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0b1222;--card:#111b30;--chip:#17233c;--line:#24324f;--ink:#e6ecf6;--muted:#a3b0c7;--head:#f3ead2;--accent:#8fb2ff;--teal:#6f95f0;--aqua:#1d2c4d;--glow:rgba(111,149,240,.14);
+--gold:linear-gradient(135deg,#b07d18 0%,#d4a53a 55%,#e9c662 100%);--up:#4fd08a;--down:#ff7a7a;--c1:#e9c662;--c2:#8fb2ff;--c3:#4fd08a;--c4:#ff9bd0;color-scheme:dark}
+*{box-sizing:border-box}html{background:var(--bg)}
+body{margin:0;background:radial-gradient(70% 40% at 80% 0%,var(--glow),transparent 70%),linear-gradient(180deg,#101b33 0,#0b1222 320px);color:var(--ink);font:15px/1.45 Inter,system-ui,sans-serif;min-height:100vh}
+header{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:12px;max-width:1500px;margin:0 auto;padding:18px 16px 4px}
+h1{font:600 30px/1 "Cormorant Garamond",Georgia,serif;color:var(--head);margin:0}h1 span{background:var(--gold);-webkit-background-clip:text;background-clip:text;color:transparent}
+.total{text-align:center}.total .big{display:block;font:600 36px/1 "Cormorant Garamond",serif;color:var(--head)}.total .sub{display:block;color:var(--muted);font-size:13px;margin-top:4px}
+.actions{justify-self:end;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+button{font:600 14px Inter;cursor:pointer;border:0;border-radius:10px;padding:9px 16px}
+#scan{background:var(--gold);color:#1f1505}#scan:disabled{opacity:.6;cursor:wait}
+.small{font-size:11px;color:var(--muted)}
+nav{max-width:1500px;margin:6px auto 0;padding:0 16px;display:flex;gap:6px;border-bottom:1px solid var(--line)}
+nav button{background:none;color:var(--muted);border-radius:10px 10px 0 0;padding:10px 18px;border-bottom:2px solid transparent}
+nav button.on{color:var(--head);border-bottom-color:#d4a53a;background:var(--chip)}
+.pos{color:var(--up)}.neg{color:var(--down)}
+main{max-width:1500px;margin:0 auto;padding:14px 16px 10px}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+@media(max-width:820px){.grid{grid-template-columns:1fr}header{grid-template-columns:1fr auto}.total{grid-column:1/-1;grid-row:2}.actions{grid-row:1;grid-column:2}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.28)}
+.top{padding:14px 16px 12px}
+.row1{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+.name{font:600 28px/1 "Cormorant Garamond",serif;color:var(--head)}.name small{font:500 12px Inter;color:var(--muted);margin-left:8px;letter-spacing:.4px;text-transform:uppercase}
+.price{font-weight:600;font-size:18px}
+.periods{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:12px 0}@media(max-width:520px){.periods{gap:4px}.periods>*{padding-left:2px!important;padding-right:2px!important;font-size:12px}}
+.p{background:var(--chip);border:1px solid var(--line);border-radius:10px;padding:6px 4px;text-align:center}.p b{display:block;font-size:11px;font-weight:500;color:var(--muted)}.p span{display:block;font-weight:600;font-size:14px;margin-top:2px}
+.roi{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.r{background:var(--aqua);border-radius:10px;padding:8px 10px}.r b{display:block;font-size:11px;font-weight:500;color:var(--muted)}.r span{display:block;font-weight:700;font-size:16px;margin-top:2px}
+.r.main{background:var(--gold);color:#1f1505}.r.main b{color:#3b2a09}.r.main span{color:#1f1505}
+.avg{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:8px;font-size:12px;color:var(--muted)}.avg b{color:var(--ink);font-weight:600}
+.chart{height:340px;border-top:1px solid var(--line);background:#0b1222}.chart iframe{width:100%;height:100%;border:0;display:block}
+.x{background:none;color:var(--muted);padding:2px 8px;font-size:18px}
+h2{font:600 22px "Cormorant Garamond",serif;color:var(--head);margin:22px 0 10px}
+.sold{width:100%;border-collapse:collapse;font-size:13px}.sold th,.sold td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line)}.sold th:first-child,.sold td:first-child{text-align:left}.sold th{color:var(--muted);font-weight:500}
+.ref .periods{margin:10px 0 6px}.ref .mini{padding:0 8px 8px}
+.log{font-size:12px;color:var(--muted);margin:8px 0}
+.search{display:flex;gap:8px;margin:4px 0 12px}.search input{flex:1;background:var(--chip);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:11px 14px;font:15px Inter;min-width:0}
+.res{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:14px;overflow:hidden}
+.res div{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--line);font-size:13px}.res div:last-child{border:0}
+.res button{background:var(--gold);color:#1f1505;padding:6px 12px}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;padding:0 16px 10px}
+@media(max-width:480px){.tiles{grid-template-columns:repeat(2,1fr)}.roi{grid-template-columns:repeat(2,1fr)}.name{font-size:26px}}
+.cgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 12px 12px}@media(max-width:560px){.cgrid{grid-template-columns:1fr}}
+.cbox{background:#0e172b;border:1px solid var(--line);border-radius:12px;padding:8px 10px 4px}.cbox h4{margin:0 0 2px;font:600 12px Inter;color:var(--muted);letter-spacing:.3px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.legend span{margin-left:8px;font-weight:500}.legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px}
+.read{padding:2px 16px 14px;color:var(--muted);font-size:13px}.read li{margin:3px 0}.read ul{margin:0;padding-left:18px}
+svg text{fill:#7f8dab;font:10px Inter}.tip{position:fixed;pointer-events:none;background:#0b1222;border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:12px;z-index:9;display:none;white-space:nowrap}
+footer{max-width:1500px;margin:0 auto;padding:10px 16px 30px;color:var(--muted);font-size:12px}
+.abar{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:14px 0 4px}.rbtn{background:var(--chip);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px 14px;font:600 13px Inter,sans-serif;cursor:pointer}.rbtn:disabled{opacity:.6;cursor:default}
+</style>
+</head>
+<body>
+<header>
+  <h1>Coin <span>Board</span></h1>
+  <div class="total" id="total"></div>
+  <div class="actions"><button id="scan">Scan wallets</button><span class="small" id="scanned"></span></div>
+</header>
+<nav><button data-tab="portfolio" class="on">Portfolio</button><button data-tab="analytics">Analytics</button><button data-tab="watchlist">Watchlist</button></nav>
+<main>
+  <section id="tab-portfolio">
+    <div class="log" id="scanlog"></div>
+    <div class="grid" id="grid"></div>
+    <h2>Market</h2><div class="grid" id="market"></div>
+  </section>
+  <section id="tab-analytics" hidden><div class="abar"><span class="small" id="asof"></span><button id="arefresh" class="rbtn">Refresh analytics</button></div><div class="grid" id="agrid"></div></section>
+  <section id="tab-watchlist" hidden>
+    <div class="search"><input id="q" placeholder="Search a coin name, ticker or contract address" autocomplete="off"><button id="go" style="background:var(--chip);color:var(--ink)">Search</button></div>
+    <div class="res" id="res" hidden></div>
+    <div class="grid" id="wgrid"></div><p class="small" id="wempty">Nothing here yet. Search for a coin above and press Add. The list is saved in this browser.</p>
+  </section>
+</main>
+<footer id="foot"></footer>
+<div class="tip" id="tip"></div>
+<script>
+const DATA = __DATA__;
+const $ = s => document.querySelector(s);
+const HOURS = [["1h",1],["6h",6],["12h",12],["24h",24],["1 week",168]];
+const fmtUSD = v => "$" + v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const fmtPct = v => v==null||!isFinite(v) ? "n/a" : (v>=0?"+":"−") + Math.abs(v*100).toFixed(1) + "%";
+const cls = v => v==null ? "" : (v>=0 ? "pos" : "neg");
+const short = v => v>=1e6 ? (v/1e6).toFixed(1)+"M" : v>=1e3 ? (v/1e3).toFixed(1)+"k" : v.toFixed(0);
+function fmtPrice(p){ if(p==null||!isFinite(p)) return "n/a"; if(p>=100) return "$"+p.toFixed(2); if(p>=1) return "$"+p.toFixed(3); if(p>=0.01) return "$"+p.toFixed(4); const e=Math.floor(Math.log10(p)); return "$"+p.toFixed(Math.min(10,2-e+2)); }
+const GECKO = {polygon:"polygon_pos",avalanche:"avax",bsc:"bsc",ethereum:"eth"};
+const store = {get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{return d}}, set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}};
+
+/* ---------- state ---------- */
+let holdings = DATA.coins.map(c=>({...c}));
+let closed = DATA.closed.slice();
+const saved = store.get("scan",null); if(saved && saved.holdings){ holdings = saved.holdings; closed = saved.closed; }
+const prices = {}, hist = {}, info = {};      // by token key
+const key = c => c.chain+":"+c.token.toLowerCase();
+holdings.forEach(c=>{ if(c.hist) hist[key(c)] = c.hist; });
+
+/* ---------- tiny SVG chart ---------- */
+function chart(el, series, o={}){
+  const W=o.w||340,H=o.h||130,L=36,R=6,T=6,B=16, ys=series.flatMap(s=>s.pts.map(p=>p[1])).filter(v=>v!=null&&isFinite(v));
+  if(!ys.length){ el.innerHTML='<div class="small" style="padding:30px;text-align:center">no data</div>'; return; }
+  let lo=o.zero?0:Math.min(...ys), hi=Math.max(...ys); if(hi===lo){hi=lo+1}; const pad=(hi-lo)*0.08; if(!o.zero) lo=(Math.min(...ys)>=0?Math.max(0,lo-pad):lo-pad); hi+=pad;
+  const xs=series.flatMap(s=>s.pts.map(p=>p[0])), x0=Math.min(...xs), x1=Math.max(...xs);
+  const X=t=>L+(t-x0)/(x1-x0||1)*(W-L-R), Y=v=>T+(1-(v-lo)/(hi-lo))*(H-T-B);
+  let g="";
+  for(let i=0;i<3;i++){ const v=lo+(hi-lo)*i/2, y=Y(v); g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="#24324f" stroke-width=".5"/><text x="${L-4}" y="${y+3}" text-anchor="end">${(o.fmt||short)(v)}</text>`; }
+  [0,.5,1].forEach(f=>{ const t=x0+(x1-x0)*f; g+=`<text x="${X(t)}" y="${H-3}" text-anchor="${f==0?"start":f==1?"end":"middle"}">${new Date(t*1000).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</text>`; });
+  series.forEach((s,i)=>{ const pts=s.pts.filter(p=>p[1]!=null&&isFinite(p[1])); if(!pts.length) return;
+    const d=pts.map((p,k)=>(k?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" ");
+    g+=`<defs><linearGradient id="g${o.id}${i}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${s.color}" stop-opacity="${s.fill??.22}"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient></defs>`;
+    if((s.fill??.22)>0) g+=`<path d="${d} L${X(pts.at(-1)[0]).toFixed(1)} ${Y(lo)} L${X(pts[0][0]).toFixed(1)} ${Y(lo)}Z" fill="url(#g${o.id}${i})"/>`;
+    g+=`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="1.6" stroke-linejoin="round"/>`; });
+  el.innerHTML=`<svg viewBox="0 0 ${W} ${H}" width="100%" style="display:block">${g}<line class="cur" y1="${T}" y2="${H-B}" stroke="#7f8dab" stroke-width=".6" style="display:none"/></svg>`;
+  const svg=el.querySelector("svg"), cur=svg.querySelector(".cur"), tip=$("#tip");
+  const move=ev=>{ const r=svg.getBoundingClientRect(), cx=(ev.touches?ev.touches[0].clientX:ev.clientX), t=x0+((cx-r.left)/r.width*W-L)/(W-L-R)*(x1-x0);
+    const rows=series.map(s=>{ let b=null; for(const p of s.pts){ if(b==null||Math.abs(p[0]-t)<Math.abs(b[0]-t)) b=p; } return [s,b]; }).filter(x=>x[1]&&x[1][1]!=null);
+    if(!rows.length) return; const tt=rows[0][1][0]; cur.setAttribute("x1",X(tt)); cur.setAttribute("x2",X(tt)); cur.style.display="";
+    tip.innerHTML=`<b>${new Date(tt*1000).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</b><br>`+rows.map(([s,p])=>`<span style="color:${s.color}">●</span> ${s.name}: ${(o.fmt||short)(p[1])}`).join("<br>");
+    tip.style.display="block"; tip.style.left=Math.min(cx+12,innerWidth-170)+"px"; tip.style.top=(ev.touches?ev.touches[0].clientY:ev.clientY)-60+"px"; };
+  svg.addEventListener("mousemove",move); svg.addEventListener("touchmove",move,{passive:true}); svg.addEventListener("mouseleave",()=>{cur.style.display="none";tip.style.display="none"});
+}
+
+/* ---------- data sources ---------- */
+async function dexToken(chain, token){
+  const r=await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`); const j=await r.json();
+  const ps=(j.pairs||[]).filter(p=>p.chainId===chain && p.baseToken.address.toLowerCase()===token.toLowerCase() && p.liquidity).sort((a,b)=>b.liquidity.usd-a.liquidity.usd);
+  return ps[0]||null;
+}
+let geckoQ = Promise.resolve();
+function geckoHist(c){   // hourly closes, 200 candles; queued 2.2 s apart (free limit 30/min)
+  const k=key(c), cached=store.get("gh:"+k,null);
+  if(cached && Date.now()-cached.t<600000){ hist[k]=cached.h; return Promise.resolve(); }
+  geckoQ = geckoQ.then(async()=>{
+    try{
+      const net=GECKO[c.chain]||c.chain;
+      const r=await fetch(`https://api.geckoterminal.com/api/v2/networks/${net}/pools/${c.pair}/ohlcv/hour?aggregate=1&limit=200`); const j=await r.json();
+      const l=j.data.attributes.ohlcv_list; if(l&&l.length){ hist[k]=l.map(x=>[x[0],x[4]]).sort((a,b)=>a[0]-b[0]); store.set("gh:"+k,{t:Date.now(),h:hist[k]}); render(); }
+    }catch(e){}
+    await new Promise(r=>setTimeout(r,2200));
+  });
+  return geckoQ;
+}
+function refPrice(c,h){ const H=hist[key(c)]; if(!H||!H.length) return null; const t=Date.now()/1000-h*3600; if(H[0][0]>t+3600*2 && h>1) return null; let v=H[0][1]; for(const [ts,pr] of H){ if(ts<=t) v=pr; else break; } return v; }
+function periodsHTML(c){ return HOURS.map(([l])=>`<div class="p"><b>${l}</b><span data-k="p${l}"></span></div>`).join(""); }
+function fillPeriods(el,c,p){
+  HOURS.forEach(([l,h])=>{ const ref=refPrice(c,h), r=ref?p/ref-1:null, early=c.bought&&(Date.now()/1000-h*3600)<Date.parse(c.bought)/1000;
+    const s=el.querySelector(`[data-k="p${l}"]`); if(!s) return; s.textContent=fmtPct(r)+(early?"*":""); s.className=cls(r); });
+}
+const embed = c => `https://dexscreener.com/${c.chain}/${c.pair}?embed=1&theme=dark&trades=0&info=0&chartLeftToolbar=0&chartTheme=dark&interval=15`;
+
+/* ---------- portfolio ---------- */
+function buildPortfolio(){
+  const grid=$("#grid"); grid.innerHTML="";
+  holdings.forEach(c=>{
+    const el=document.createElement("section"); el.className="card"; el.dataset.k=key(c);
+    el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol||c.name}<small>${c.chain==="arc"?"Arc":c.chain==="robinhood"?"Robinhood":c.chain}</small></div><div class="price" data-k="price"></div></div>
+    <div class="periods">${periodsHTML(c)}</div>
+    <div class="roi"><div class="r"><b>Value</b><span data-k="val"></span></div><div class="r"><b>Cost</b><span data-k="cost"></span></div><div class="r"><b>Profit / loss</b><span data-k="pl"></span></div><div class="r main"><b>Return</b><span data-k="ret"></span></div></div>
+    <div class="avg" data-k="avg"></div></div>
+    <div class="chart">${c.pair?`<iframe loading="lazy" src="${embed(c)}" title="chart"></iframe>`:""}</div>`;
+    grid.appendChild(el);
+  });
+}
+function renderPortfolio(){
+  let V=0,C=0;
+  holdings.forEach(c=>{
+    const el=document.querySelector(`.card[data-k="${key(c)}"]`); if(!el) return; const p=prices[key(c)]??c.px??(hist[key(c)]||[[0,0]]).at(-1)[1];
+    const q=k=>el.querySelector(`[data-k="${k}"]`); q("price").textContent=fmtPrice(p); fillPeriods(el,c,p);
+    const val=p*c.qty, pl=val-c.cost; V+=val; C+=c.cost;
+    q("val").textContent=fmtUSD(val); q("cost").textContent=fmtUSD(c.cost); q("pl").textContent=(pl>=0?"+":"−")+fmtUSD(Math.abs(pl)); q("pl").className=cls(pl); q("ret").textContent=fmtPct(val/c.cost-1);
+    const avgb=c.cost/c.qty, avgs=c.soldQty>0?c.soldProceeds/c.soldQty:null;
+    q("avg").innerHTML=`<span>Avg buy <b>${fmtPrice(avgb)}</b></span>${avgs?`<span>Avg sell <b>${fmtPrice(avgs)}</b></span><span>Realised <b class="${cls(c.realised)}">${c.realised>=0?"+":"−"}${fmtUSD(Math.abs(c.realised))}</b></span>`:""}<span>Holding <b>${c.qty.toLocaleString("en-US",{maximumFractionDigits:2})}</b></span>`;
+  });
+  const pl=V-C;
+  $("#total").innerHTML=`<span class="big">${fmtUSD(V)}</span><span class="sub"><b class="${cls(pl)}">${fmtPct(V/C-1)}</b></span>`;
+}
+
+/* ---------- market reference: Bitcoin and Ethereum ---------- */
+const MKT=[{id:"bitcoin",name:"Bitcoin",sym:"BTC",pair:"0x56534741CD8B152df6d48AdF7ac51f75169A83b2"},{id:"ethereum",name:"Ethereum",sym:"ETH",pair:"0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36"}]; const mk={}; for(const m of MKT) if(DATA.mkt&&DATA.mkt[m.id]) mk[m.id]=DATA.mkt[m.id];
+function buildMarket(){  $("#market").innerHTML=MKT.map(m=>`<section class="card ref" id="m-${m.id}"><div class="top"><div class="row1"><div class="name">${m.name}<small>${m.sym}</small></div><div class="price" data-k="price"></div></div><div class="periods">${periodsHTML(m)}</div></div><div class="chart"><iframe loading="lazy" src="${embed({chain:"ethereum",pair:m.pair})}" title="chart"></iframe></div></section>`).join(""); }
+async function loadMarket(){
+  for(const m of MKT){
+    try{ const c=store.get("mk:"+m.id,null); let d;
+      if(c&&Date.now()-c.t<240000) d=c.d; else { const r=await fetch(`https://api.coingecko.com/api/v3/coins/${m.id}/market_chart?vs_currency=usd&days=8`); d=(await r.json()).prices.map(x=>[Math.floor(x[0]/1000),x[1]]); store.set("mk:"+m.id,{t:Date.now(),d}); }
+      mk[m.id]=d; }catch(e){}
+    renderMarket();
+  }
+  renderMarket();
+}
+function renderMarket(){
+  MKT.forEach(m=>{ const d=mk[m.id], el=$("#m-"+m.id); if(!d||!el) return; const p=d.at(-1)[1]; el.querySelector('[data-k="price"]').textContent=fmtUSD(p);
+    HOURS.forEach(([l,h])=>{ const t=Date.now()/1000-h*3600; let ref=d[0][1]; for(const [ts,pr] of d){ if(ts<=t) ref=pr; else break; } const r=p/ref-1, s=el.querySelector(`[data-k="p${l}"]`); s.textContent=fmtPct(r); s.className=cls(r); });
+  });
+}
+
+/* ---------- analytics ---------- */
+let AN=null;
+async function buildAnalytics(){
+  const box=$("#agrid");  if(!AN){ try{ AN=await (await fetch("analytics.json")).json(); }catch(e){ box.innerHTML='<p class="small">Analytics file missing.</p>'; return; } }
+  box.innerHTML="";
+  if(AN.built&&!/started/.test($("#asof").textContent)) $("#asof").textContent="Holder and volume data as of "+new Date(AN.built*1000).toUTCString().slice(5,22)+" UTC";
+  holdings.forEach(c=>{
+    const a=AN.coins[c.symbol||c.name]; if(!a) return; const r=a.rows, last=r.at(-1), pick=i=>r[Math.max(0,r.length+i)];
+    const T=(b,v,cl)=>`<div class="r"><b>${b}</b><span class="${cl||""}">${v}</span></div>`;
+    const el=document.createElement("section"); el.className="card";
+    el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol||c.name}<small>${c.chain==="arc"?"Arc":"Robinhood"}</small></div><div class="price">${fmtPrice(prices[key(c)]??a.px)}</div></div></div>
+    <div class="tiles">${T("From period high",fmtPct(a.px/a.athWindow-1),cls(a.px/a.athWindow-1))}${T("Volume 7d vs prior",fmtPct(a.vol7/a.volPrev-1),cls(a.vol7/a.volPrev-1))}${T("Holders",last.holders.toLocaleString()+` <small class="${cls(last.holders-pick(-8).holders)}">${last.holders-pick(-8).holders>=0?"+":""}${last.holders-pick(-8).holders}</small>`)}${T("Top 10 hold",last.top10.toFixed(1)+"%")}</div>
+    <div class="cgrid"><div class="cbox"><h4>Price</h4><div data-c="price"></div></div><div class="cbox"><h4>Holdings by group (% of supply)<span class="legend"><span><i style="background:var(--c1)"></i>Whale</span><span><i style="background:var(--c2)"></i>Medium</span><span><i style="background:var(--c3)"></i>Small</span><span><i style="background:var(--c4)"></i>New</span></span></h4><div data-c="grp"></div></div>
+    <div class="cbox"><h4>Daily volume<span class="legend"><span><i style="background:var(--up)"></i>Buys</span><span><i style="background:var(--down)"></i>Sells</span></span></h4><div data-c="vol"></div></div><div class="cbox"><h4>Holders</h4><div data-c="hold"></div></div></div>
+    <ul class="read">${a.read.map(t=>`<li>${t}</li>`).join("")}${a.note?`<li class="small">${a.note}</li>`:""}</ul>`;
+    box.appendChild(el);
+    const pts=f=>r.map(x=>[x.d,f(x)]);
+    chart(el.querySelector('[data-c="price"]'),[{name:"Price",color:"#e9c662",pts:pts(x=>x.close)}],{id:"ap"+c.name,fmt:v=>"$"+(v>=10?v.toFixed(0):v>=1?v.toFixed(2):v.toPrecision(2))});
+    chart(el.querySelector('[data-c="grp"]'),[{name:"Whale",color:"#e9c662",pts:pts(x=>x.whale),fill:.18},{name:"Medium",color:"#8fb2ff",pts:pts(x=>x.medium),fill:.12},{name:"Small",color:"#4fd08a",pts:pts(x=>x.small),fill:.1},{name:"New",color:"#ff9bd0",pts:pts(x=>x.new),fill:0}],{id:"ag"+c.name,fmt:v=>v.toFixed(1)+"%",zero:true});
+    chart(el.querySelector('[data-c="vol"]'),[{name:"Buys",color:"#4fd08a",pts:pts(x=>x.buy),fill:.2},{name:"Sells",color:"#ff7a7a",pts:pts(x=>x.sell),fill:.2}],{id:"av"+c.name,fmt:v=>"$"+short(v),zero:true});
+    chart(el.querySelector('[data-c="hold"]'),[{name:"Holders",color:"#8fb2ff",pts:pts(x=>x.holders)}],{id:"ah"+c.name});
+  });
+}
+
+/* ---------- watchlist ---------- */
+let watch = store.get("watch",[]);
+function buildWatch(){
+  const g=$("#wgrid"); g.innerHTML=""; $("#wempty").style.display=watch.length?"none":"";
+  watch.forEach(c=>{
+    const el=document.createElement("section"); el.className="card"; el.dataset.k=key(c);
+    el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol}<small>${c.chain}</small></div><div><span class="price" data-k="price"></span><button class="x" data-rm="${key(c)}" title="Remove">×</button></div></div>
+    <div class="periods">${periodsHTML(c)}</div><div class="roi"><div class="r"><b>Market cap</b><span data-k="mc"></span></div><div class="r"><b>Liquidity</b><span data-k="liq"></span></div><div class="r"><b>24h volume</b><span data-k="vol"></span></div><div class="r main"><b>24h</b><span data-k="d24"></span></div></div></div>
+    <div class="chart"><iframe loading="lazy" src="${embed(c)}" title="chart"></iframe></div>`;
+    g.appendChild(el); geckoHist(c);
+  });
+  g.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{ watch=watch.filter(c=>key(c)!==b.dataset.rm); store.set("watch",watch); buildWatch(); renderWatch(); });
+}
+function renderWatch(){
+  watch.forEach(c=>{ const el=document.querySelector(`#wgrid .card[data-k="${key(c)}"]`), i=info[key(c)]; if(!el) return; const p=prices[key(c)]??(i?parseFloat(i.priceUsd):null); if(p==null) return;
+    el.querySelector('[data-k="price"]').textContent=fmtPrice(p); fillPeriods(el,c,p);
+    if(i){ el.querySelector('[data-k="mc"]').textContent="$"+short(i.fdv||i.marketCap||0); el.querySelector('[data-k="liq"]').textContent="$"+short(i.liquidity?.usd||0); el.querySelector('[data-k="vol"]').textContent="$"+short(i.volume?.h24||0); const d=(i.priceChange?.h24||0)/100; const s=el.querySelector('[data-k="d24"]'); s.textContent=fmtPct(d); } });
+}
+async function doSearch(){
+  const q=$("#q").value.trim(); if(!q) return; const res=$("#res"); res.hidden=false; res.innerHTML='<div>Searching…</div>';
+  try{ const j=await (await fetch("https://api.dexscreener.com/latest/dex/search?q="+encodeURIComponent(q))).json();
+    const seen=new Set(), ps=(j.pairs||[]).filter(p=>p.liquidity&&p.liquidity.usd>1000).sort((a,b)=>b.liquidity.usd-a.liquidity.usd).filter(p=>{const k=p.chainId+p.baseToken.address.toLowerCase(); if(seen.has(k)) return false; seen.add(k); return true;}).slice(0,10);
+    res.innerHTML=ps.length?ps.map((p,i)=>`<div><span><b>${p.baseToken.symbol}</b> ${p.baseToken.name||""} <span class="small">${p.chainId} · ${fmtPrice(parseFloat(p.priceUsd))} · liq $${short(p.liquidity.usd)} · 24h ${p.priceChange?.h24??0}%</span></span><button data-i="${i}">Add</button></div>`).join(""):'<div>Nothing found with liquidity.</div>';
+    res.querySelectorAll("button").forEach(b=>b.onclick=()=>{ const p=ps[+b.dataset.i]; const c={chain:p.chainId,token:p.baseToken.address,symbol:p.baseToken.symbol,pair:p.pairAddress};
+      if(!watch.find(x=>key(x)===key(c))){ watch.push(c); store.set("watch",watch); } info[key(c)]=p; buildWatch(); renderWatch(); res.hidden=true; $("#q").value=""; });
+  }catch(e){ res.innerHTML="<div>Search failed. Try again.</div>"; }
+}
+
+/* ---------- scan ---------- */
+async function scan(){
+  const b=$("#scan"); b.disabled=true; b.textContent="Scanning…"; $("#scanlog").textContent="Reading your wallets on Arc and Robinhood Chain (about 20 seconds)…";
+  try{
+    const r=await fetch("/api/scan",{method:"POST"}); const j=await r.json(); if(j.error) throw new Error(j.error);
+    const had=new Map(holdings.map(c=>[key(c),c])); const out=[];
+    for(const h of j.holdings){
+      const k=h.chain+":"+h.token; const pair=await dexToken(h.chain,h.token).catch(()=>null);
+      if(!pair || h.qty*parseFloat(pair.priceUsd)<0.5){ continue; }          // unlisted or dust: hidden
+      const old=had.get(k); out.push({name:h.symbol,symbol:h.symbol,chain:h.chain,token:h.token,qty:h.qty,cost:h.cost,soldQty:h.soldQty,soldProceeds:h.soldProceeds,realised:h.realised,pair:old?.pair||pair.pairAddress,bought:old?.bought,hist:old?.hist,px:parseFloat(pair.priceUsd)});
+    }
+    const names=a=>a.map(c=>c.symbol).join(", ")||"none"; const added=out.filter(c=>!had.has(key(c))), gone=[...had.values()].filter(c=>!out.find(o=>key(o)===key(c)));
+    const changed=out.filter(c=>had.has(key(c)) && (Math.abs(had.get(key(c)).qty-c.qty)>1e-6*Math.max(1,c.qty) || Math.abs(had.get(key(c)).cost-c.cost)>0.01));
+    holdings=out; closed=j.closed.map(x=>({...x,name:x.symbol})); store.set("scan",{holdings,closed,at:j.scannedAt});
+    out.forEach(c=>{ prices[key(c)]=c.px; }); buildPortfolio(); holdings.forEach(geckoHist); render(); AN=AN; buildAnalytics();
+    $("#scanlog").innerHTML=`Scan done: <b>${added.length}</b> new (${names(added)}), <b>${gone.length}</b> removed (${names(gone)}), <b>${changed.length}</b> changed (${names(changed)}).`+(j.notes&&j.notes.length?`<br>`+j.notes.map(n=>n.replace(/0x[0-9a-f]{40}/g,s=>s.slice(0,8)+"…")).join("<br>"):"");
+    $("#scanned").textContent="Scanned "+new Date(j.scannedAt*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+  }catch(e){ $("#scanlog").textContent="Scan failed: "+e.message; }
+  b.disabled=false; b.textContent="Scan wallets";
+}
+
+/* ---------- wiring ---------- */
+function render(){ renderPortfolio(); renderWatch(); renderMarket();
+  $("#foot").textContent=`Prices live from DexScreener every 30 s; hourly history from GeckoTerminal; holdings as of ${saved?.at?"your last scan":"the build ("+new Date(DATA.built*1000).toUTCString().slice(5,22)+" UTC)"}. * = held for less than that period (the coin’s move, not yours). Press Scan wallets after any buy or sell.`; }
+async function refresh(){
+  await Promise.all([...holdings,...watch].map(async c=>{ try{ const p=await dexToken(c.chain,c.token); if(p){ prices[key(c)]=parseFloat(p.priceUsd); info[key(c)]=p; } }catch(e){} }));
+  render();
+}
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{ document.querySelectorAll("nav button").forEach(x=>x.classList.toggle("on",x===b)); ["portfolio","analytics","watchlist"].forEach(t=>$("#tab-"+t).hidden=t!==b.dataset.tab); if(b.dataset.tab==="analytics") buildAnalytics(); });
+$("#scan").onclick=scan;
+$("#arefresh").onclick=async()=>{ const b=$("#arefresh"); b.disabled=true; b.textContent="Starting…";
+  try{ const r=await fetch("api/refresh",{method:"POST"}), j=await r.json(); $("#asof").textContent=r.ok?"Refresh started. It takes about 10 minutes; reload this page after that.":(j.error||"Could not start the refresh."); }
+  catch(e){ $("#asof").textContent="Could not start the refresh."; }
+  b.disabled=false; b.textContent="Refresh analytics"; };
+ $("#go").onclick=doSearch; $("#q").addEventListener("keydown",e=>{ if(e.key==="Enter") doSearch(); });
+if(saved?.at) $("#scanned").textContent="Scanned "+new Date(saved.at*1000).toLocaleString([], {day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+buildPortfolio(); buildMarket(); renderMarket(); buildWatch(); render(); refresh(); setInterval(refresh,30000);
+holdings.forEach(geckoHist); loadMarket(); setInterval(loadMarket,300000);
+</script>
+</body>
+</html>
