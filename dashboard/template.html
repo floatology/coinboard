@@ -112,6 +112,8 @@ h1.logo img{height:62px}@media(max-width:520px){h1.logo img{height:36px}}
 <script>
 const DATA = __DATA__;
 const $ = s => document.querySelector(s);
+// text from outside (token names and symbols from the chain or DexScreener) is escaped before it goes into the page
+const esc = s => String(s ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
 const HOURS = [["1h",1],["6h",6],["12h",12],["24h",24],["1 week",168]];
 const fmtUSD = v => "$" + v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const fmtPct = v => v==null||!isFinite(v) ? "n/a" : (v>=0?"+":"−") + Math.abs(v*100).toFixed(1) + "%";
@@ -199,11 +201,11 @@ function buildPortfolio(){
   const grid=$("#grid"); grid.innerHTML="";
   holdings.forEach(c=>{
     const el=document.createElement("section"); el.className="card"; el.dataset.k=key(c);
-    el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol||c.name}<small>${c.chain==="arc"?"Arc":c.chain==="robinhood"?"Robinhood":c.chain}</small></div><div class="pr"><span class="mcap" data-k="mcap"></span><div class="price" data-k="price"></div></div></div>
+    el.innerHTML=`<div class="top"><div class="row1"><div class="name">${esc(c.symbol||c.name)}<small>${c.chain==="arc"?"Arc":c.chain==="robinhood"?"Robinhood":c.chain}</small></div><div class="pr"><span class="mcap" data-k="mcap"></span><div class="price" data-k="price"></div></div></div>
     <div class="periods">${periodsHTML(c)}</div>
     <div class="roi"><div class="r"><b>Value</b><span data-k="val"></span></div><div class="r"><b>Cost</b><span data-k="cost"></span></div><div class="r"><b>Profit / loss</b><span data-k="pl"></span></div><div class="r main"><b>Return</b><span data-k="ret"></span></div></div>
     <div class="avg" data-k="avg"></div></div>
-    <div class="chart dx">${c.pair?`<iframe data-src="${embed(c)}" title="chart"></iframe>`:""}</div>`;
+    <div class="chart dx">${c.pair?`<iframe data-src="${esc(embed(c))}" title="chart"></iframe>`:""}</div>`;
     grid.appendChild(el);
   });
 }
@@ -213,13 +215,13 @@ function renderGlance(){ const G=[["1h",1],["6h",6],["12h",12],["24h",24]], g=$(
     return {c,r:Object.fromEntries(G.map(([,h])=>[h,periodReturn(c,h,p)]))}; });
   rows.sort((a,b)=>Math.abs(b.r[gsort]??-1)-Math.abs(a.r[gsort]??-1));
   g.innerHTML=`<div class="gr gh"><b></b>${G.map(([l,h])=>`<span data-gs="${h}" class="${h===gsort?"on":""}">${l}${h===gsort?" ▾":""}</span>`).join("")}</div>`+rows.map(({c,r})=>
-    `<div class="gr"><b data-go="${key(c)}">${c.symbol||c.name}</b>${G.map(([l,h])=>{ const early=c.bought&&(Date.now()/1000-h*3600)<Date.parse(c.bought)/1000; return `<span class="${cls(r[h])}${h===gsort?" sel":""}">${fmtPct(r[h])}${early&&r[h]!=null?"*":""}</span>`; }).join("")}</div>`).join("");
+    `<div class="gr"><b data-go="${esc(key(c))}">${esc(c.symbol||c.name)}</b>${G.map(([l,h])=>{ const early=c.bought&&(Date.now()/1000-h*3600)<Date.parse(c.bought)/1000; return `<span class="${cls(r[h])}${h===gsort?" sel":""}">${fmtPct(r[h])}${early&&r[h]!=null?"*":""}</span>`; }).join("")}</div>`).join("");
   g.querySelectorAll("[data-gs]").forEach(x=>x.onclick=()=>{ gsort=+x.dataset.gs; store.set("gsort",gsort); renderGlance(); });
-  g.querySelectorAll("[data-go]").forEach(x=>x.onclick=()=>{ const card=document.querySelector(`#grid .card[data-k="${x.dataset.go}"]`); const ch=card&&card.querySelector(".chart"); if(ch) ch.scrollIntoView({behavior:"smooth",block:"center"}); }); }
+  g.querySelectorAll("[data-go]").forEach(x=>x.onclick=()=>{ const card=document.querySelector(`#grid .card[data-k="${CSS.escape(x.dataset.go)}"]`); const ch=card&&card.querySelector(".chart"); if(ch) ch.scrollIntoView({behavior:"smooth",block:"center"}); }); }
 function renderPortfolio(){
   let V=0,C=0;
   holdings.forEach(c=>{
-    const el=document.querySelector(`.card[data-k="${key(c)}"]`); if(!el) return; const p=prices[key(c)]??c.px??(hist[key(c)]||[[0,0]]).at(-1)[1];
+    const el=document.querySelector(`.card[data-k="${CSS.escape(key(c))}"]`); if(!el) return; const p=prices[key(c)]??c.px??(hist[key(c)]||[[0,0]]).at(-1)[1];
     const q=k=>el.querySelector(`[data-k="${k}"]`); q("price").textContent=fmtPrice(p); const mi=info[key(c)], mv=mi?(mi.fdv||mi.marketCap):0; q("mcap").textContent=mv?"Mcap "+fmtMcap(mv):""; fillPeriods(el,c,p);
     const val=p*c.qty, pl=val-c.cost; V+=val; C+=c.cost;
     q("val").textContent=fmtUSD(val); q("cost").textContent=fmtUSD(c.cost); q("pl").textContent=(pl>=0?"+":"−")+fmtUSD(Math.abs(pl)); q("pl").className=cls(pl); q("ret").textContent=fmtPct(val/c.cost-1);
@@ -259,7 +261,7 @@ async function buildAnalytics(){
     const a=AN.coins[c.symbol||c.name]; if(!a) return; const r=a.rows, last=r.at(-1), pick=i=>r[Math.max(0,r.length+i)];
     const T=(b,v,cl)=>`<div class="r"><b>${b}</b><span class="${cl||""}">${v}</span></div>`;
     const el=document.createElement("section"); el.className="card";
-    el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol||c.name}<small>${c.chain==="arc"?"Arc":"Robinhood"}</small></div><div class="pr"><span class="mcap">${a.supply?"Mcap "+fmtMcap((prices[key(c)]??a.px)*a.supply):""}</span><div class="price">${fmtPrice(prices[key(c)]??a.px)}</div></div></div></div>
+    el.innerHTML=`<div class="top"><div class="row1"><div class="name">${esc(c.symbol||c.name)}<small>${c.chain==="arc"?"Arc":"Robinhood"}</small></div><div class="pr"><span class="mcap">${a.supply?"Mcap "+fmtMcap((prices[key(c)]??a.px)*a.supply):""}</span><div class="price">${fmtPrice(prices[key(c)]??a.px)}</div></div></div></div>
     <div class="tiles">${(()=>{ const ath=a.ath??a.athWindow, px=prices[key(c)]??a.px; return `<div class="r" style="display:flex;justify-content:space-between;gap:8px;position:relative"><div><b>From ATH</b><span class="${cls(px/ath-1)}">${fmtPct(px/ath-1)}</span></div>${a.athMcap?`<div style="text-align:right"><b>ATH mcap</b><span>${fmtMcap(a.athMcap)}</span></div><small class="small" style="position:absolute;right:10px;bottom:3px;font-size:10px;line-height:1">${(ath/px).toFixed(1)}x</small>`:""}</div>`; })()}${(()=>{ const h0=pick(-8).holders, d=h0?last.holders/h0-1:null; return T("Holders",last.holders.toLocaleString()+` <small class="${cls(d)}">${fmtPct(d)} (7d)</small>`); })()}${T("Volume 7d vs prior 7d",fmtPct(a.vol7/a.volPrev-1),cls(a.vol7/a.volPrev-1))}${(()=>{ const d=last.top10-pick(-8).top10; return T("Top 10 hold",last.top10.toFixed(1)+`% <small class="${cls(d)}">${d>=0?"+":"−"}${Math.abs(d).toFixed(1)}% (7d)</small>`); })()}</div>
     <div class="cgrid"><div class="cbox"><h4>Price</h4><div data-c="price"></div></div><div class="cbox"><h4>Holdings by group (% of supply)<span class="legend"><span><i style="background:var(--c1)"></i>Whale</span><span><i style="background:var(--c2)"></i>Medium</span><span><i style="background:var(--c3)"></i>Small</span><span><i style="background:var(--c4)"></i>New</span></span></h4><div data-c="grp"></div></div>
     <div class="cbox"><h4>Daily volume, last 30 days<span class="legend"><span><i style="background:#ff6ac1"></i>Volume</span><span><i style="background:#ffd23f"></i>7d average</span></span></h4><div data-c="vol"></div></div><div class="cbox"><h4>Holders</h4><div data-c="hold"></div></div></div>
@@ -281,15 +283,15 @@ function buildWatch(){
   const g=$("#wgrid"); g.innerHTML=""; $("#wempty").style.display=watch.length?"none":"";
   watch.forEach(c=>{
     const el=document.createElement("section"); el.className="card"; el.dataset.k=key(c);
-    el.innerHTML=`<div class="top"><div class="row1"><div class="name">${c.symbol}<small>${c.chain}</small></div><div><span class="price" data-k="price"></span><button class="x" data-rm="${key(c)}" title="Remove">×</button></div></div>
+    el.innerHTML=`<div class="top"><div class="row1"><div class="name">${esc(c.symbol)}<small>${esc(c.chain)}</small></div><div><span class="price" data-k="price"></span><button class="x" data-rm="${esc(key(c))}" title="Remove">×</button></div></div>
     <div class="periods">${periodsHTML(c)}</div><div class="roi"><div class="r"><b>Market cap</b><span data-k="mc"></span></div><div class="r"><b>Liquidity</b><span data-k="liq"></span></div><div class="r"><b>24h volume</b><span data-k="vol"></span></div><div class="r main"><b>24h</b><span data-k="d24"></span></div></div></div>
-    <div class="chart dx"><iframe data-src="${embed(c)}" title="chart"></iframe></div>`;
+    <div class="chart dx"><iframe data-src="${esc(embed(c))}" title="chart"></iframe></div>`;
     g.appendChild(el); geckoHist(c);
   });
   g.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{ watch=watch.filter(c=>key(c)!==b.dataset.rm); store.set("watch",watch); buildWatch(); renderWatch(); });
 }
 function renderWatch(){
-  watch.forEach(c=>{ const el=document.querySelector(`#wgrid .card[data-k="${key(c)}"]`), i=info[key(c)]; if(!el) return; const p=prices[key(c)]??(i?parseFloat(i.priceUsd):null); if(p==null) return;
+  watch.forEach(c=>{ const el=document.querySelector(`#wgrid .card[data-k="${CSS.escape(key(c))}"]`), i=info[key(c)]; if(!el) return; const p=prices[key(c)]??(i?parseFloat(i.priceUsd):null); if(p==null) return;
     el.querySelector('[data-k="price"]').textContent=fmtPrice(p); fillPeriods(el,c,p);
     if(i){ el.querySelector('[data-k="mc"]').textContent="$"+short(i.fdv||i.marketCap||0); el.querySelector('[data-k="liq"]').textContent="$"+short(i.liquidity?.usd||0); el.querySelector('[data-k="vol"]').textContent="$"+short(i.volume?.h24||0); const d=(i.priceChange?.h24||0)/100; const s=el.querySelector('[data-k="d24"]'); s.textContent=fmtPct(d); } });
 }
@@ -297,7 +299,7 @@ async function doSearch(){
   const q=$("#q").value.trim(); if(!q) return; const res=$("#res"); res.hidden=false; res.innerHTML='<div>Searching…</div>';
   try{ const j=await (await fetch("https://api.dexscreener.com/latest/dex/search?q="+encodeURIComponent(q))).json();
     const seen=new Set(), ps=(j.pairs||[]).filter(p=>p.liquidity&&p.liquidity.usd>1000).sort((a,b)=>b.liquidity.usd-a.liquidity.usd).filter(p=>{const k=p.chainId+p.baseToken.address.toLowerCase(); if(seen.has(k)) return false; seen.add(k); return true;}).slice(0,10);
-    res.innerHTML=ps.length?ps.map((p,i)=>`<div><span><b>${p.baseToken.symbol}</b> ${p.baseToken.name||""} <span class="small">${p.chainId} · ${fmtPrice(parseFloat(p.priceUsd))} · liq $${short(p.liquidity.usd)} · 24h ${p.priceChange?.h24??0}%</span></span><button data-i="${i}">Add</button></div>`).join(""):'<div>Nothing found with liquidity.</div>';
+    res.innerHTML=ps.length?ps.map((p,i)=>`<div><span><b>${esc(p.baseToken.symbol)}</b> ${esc(p.baseToken.name)} <span class="small">${esc(p.chainId)} · ${fmtPrice(parseFloat(p.priceUsd))} · liq $${short(p.liquidity.usd)} · 24h ${p.priceChange?.h24??0}%</span></span><button data-i="${i}">Add</button></div>`).join(""):'<div>Nothing found with liquidity.</div>';
     res.querySelectorAll("button").forEach(b=>b.onclick=()=>{ const p=ps[+b.dataset.i]; const c={chain:p.chainId,token:p.baseToken.address,symbol:p.baseToken.symbol,pair:p.pairAddress};
       if(!watch.find(x=>key(x)===key(c))){ watch.push(c); store.set("watch",watch); } info[key(c)]=p; buildWatch(); watchFrames(); renderWatch(); res.hidden=true; $("#q").value=""; });
   }catch(e){ res.innerHTML="<div>Search failed. Try again.</div>"; }
@@ -318,11 +320,11 @@ async function scan(){
       out.push({name:h.symbol,symbol:h.symbol,chain:h.chain,token:h.token,qty:h.qty,cost:h.cost,soldQty:h.soldQty,soldProceeds:h.soldProceeds,realised:h.realised,pair:old?.pair||pair.pairAddress,bought:old?.bought,hist:old?.hist,px});
     }
     const ord=[...had.keys()]; out.sort((a,b)=>{ const i=ord.indexOf(key(a)), j=ord.indexOf(key(b)); return (i<0?99:i)-(j<0?99:j); });
-    const names=a=>a.map(c=>c.symbol).join(", ")||"none"; const added=out.filter(c=>!had.has(key(c))), gone=[...had.values()].filter(c=>!out.find(o=>key(o)===key(c)));
+    const names=a=>a.map(c=>esc(c.symbol)).join(", ")||"none"; const added=out.filter(c=>!had.has(key(c))), gone=[...had.values()].filter(c=>!out.find(o=>key(o)===key(c)));
     const changed=out.filter(c=>had.has(key(c)) && (Math.abs(had.get(key(c)).qty-c.qty)>1e-6*Math.max(1,c.qty) || Math.abs(had.get(key(c)).cost-c.cost)>0.01));
     holdings=out; closed=j.closed.map(x=>({...x,name:x.symbol})); store.set("scan",{holdings,closed,at:j.scannedAt});
     out.forEach(c=>{ prices[key(c)]=c.px; }); buildPortfolio(); holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); render(); AN=AN; buildAnalytics();
-    $("#scanlog").innerHTML=`Scan done: <b>${added.length}</b> new (${names(added)}), <b>${gone.length}</b> removed (${names(gone)}), <b>${changed.length}</b> changed (${names(changed)}).`+(j.notes&&j.notes.length?`<br>`+j.notes.map(n=>n.replace(/0x[0-9a-f]{40}/g,s=>s.slice(0,8)+"…")).join("<br>"):"");
+    $("#scanlog").innerHTML=`Scan done: <b>${added.length}</b> new (${names(added)}), <b>${gone.length}</b> removed (${names(gone)}), <b>${changed.length}</b> changed (${names(changed)}).`+(j.notes&&j.notes.length?`<br>`+j.notes.map(n=>esc(n.replace(/0x[0-9a-f]{40}/g,s=>s.slice(0,8)+"…"))).join("<br>"):"");
   }catch(e){ $("#scanlog").textContent="Scan failed: "+e.message; }
   b.disabled=false; b.textContent="Scan wallets";
 }

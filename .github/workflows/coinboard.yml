@@ -4,7 +4,10 @@ name: coinboard
 #   POSITIONS_JSON  the owner's positions file (costs and quantities; never committed)
 #   VERCEL_TOKEN    Vercel token that can deploy the coinboard project
 #   VERCEL_PROJECT  the Vercel project name
-#   SEED_REPO, SEED_TOKEN  only for the first run (or if the cache is lost): where to fetch the starting archives from
+#   SEED_REPO, SEED_TOKEN  optional: a fallback source of starting archives if both the cache and the backup release are lost
+# The archives live in the Actions cache between runs; a copy is uploaded daily to the "archive-backup" release (public
+# chain data only; the replay state with costs is left out). A small commit every ~40 days keeps the schedule enabled
+# (GitHub switches off scheduled workflows in public repositories after 60 days without repository activity).
 on:
   schedule:
     - cron: "17 * * * *"
@@ -12,6 +15,8 @@ on:
 concurrency:
   group: coinboard
   cancel-in-progress: true    # a newer run (new code, the hourly schedule or the page button) replaces an older one
+permissions:
+  contents: write      # the keep-alive commit and the archive backup release
 jobs:
   refresh:
     runs-on: ubuntu-latest
@@ -32,15 +37,22 @@ jobs:
           path: data
           key: coinboard-data-${{ github.run_id }}
           restore-keys: coinboard-data-
-      - name: Seed archives (first run only)
+      - name: Restore archives from the backup (only if the cache was lost)
         if: steps.cache.outputs.cache-matched-key == ''
         env:
+          GH_TOKEN: ${{ github.token }}
           SEED_REPO: ${{ secrets.SEED_REPO }}
           SEED_TOKEN: ${{ secrets.SEED_TOKEN }}
         run: |
-          git clone -q --depth 1 --branch coinboard-seed "https://x-access-token:${SEED_TOKEN}@github.com/${SEED_REPO}.git" /tmp/seed
-          cat /tmp/seed/seed/part-* | tar -x
-          rm -rf /tmp/seed
+          if gh release download archive-backup -p data.tar.zst -D /tmp 2>/dev/null; then
+            zstd -dc /tmp/data.tar.zst | tar -x && rm /tmp/data.tar.zst
+          elif [ -n "$SEED_TOKEN" ]; then
+            git clone -q --depth 1 --branch coinboard-seed "https://x-access-token:${SEED_TOKEN}@github.com/${SEED_REPO}.git" /tmp/seed
+            cat /tmp/seed/seed/part-* | tar -x
+            rm -rf /tmp/seed
+          else
+            echo "::error::no cached archives, no backup release and no seed: nothing to start from"; exit 1
+          fi
       - name: Refresh, analyse, build, deploy
         env:
           POSITIONS_JSON: ${{ secrets.POSITIONS_JSON }}
@@ -55,3 +67,26 @@ jobs:
         with:
           path: data
           key: coinboard-data-${{ github.run_id }}
+      - name: Back up archives (daily, or if there is no backup yet)
+        if: success()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$(date -u +%H)" = "03" ] || ! gh release view archive-backup >/dev/null 2>&1; then
+            tar --exclude=data/coinboard_replay_state.json -c data | zstd -T0 -10 -q -o /tmp/data.tar.zst
+            gh release view archive-backup >/dev/null 2>&1 || gh release create archive-backup --title "Archive backup" \
+              --notes "Daily copy of the trade archives (public chain data) so the hourly job can recover if its cache is lost."
+            gh release upload archive-backup /tmp/data.tar.zst --clobber
+            echo "backed up $(du -h /tmp/data.tar.zst | cut -f1)"
+          fi
+      - name: Keep the hourly schedule alive
+        if: success()
+        continue-on-error: true
+        run: |
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $((40*86400)) ]; then
+            date -u +%F > .github/keepalive
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/keepalive && git commit -qm "Keep the hourly schedule alive" && git push -q
+          fi

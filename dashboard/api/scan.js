@@ -122,8 +122,10 @@ async function scanChain(key, ch, notes) {
       await new Promise(r => setTimeout(r, 1500));
       const again = await balanceAll(url, t, wallets);
       if (again == null || Math.abs(Number(again) / 10 ** h.dec - oc) > tol(oc)) { notes.push(`${key}: ${h.symbol} balance reads disagree; kept the replay`); return; }
-      notes.push(`${key}: ${h.symbol} balance on chain ${oc.toPrecision(8)} differs from the replay ${h.qty.toPrecision(8)}; using the chain`);
-      if (h.qty > 0) h.cost *= oc / h.qty; h.qty = oc;
+      // fewer on chain: tokens left unseen, cost reduced at the average; more on chain: arrived unseen, price unknown, cost unchanged
+      notes.push(`${key}: ${h.symbol} balance on chain ${oc.toPrecision(8)} differs from the replay ${h.qty.toPrecision(8)}; using the chain` + (oc > h.qty ? " (extra tokens counted at no cost)" : ""));
+      if (oc < h.qty && h.qty > 0) h.cost *= oc / h.qty;
+      h.qty = oc;
     }
     h.onchain = oc;
   });

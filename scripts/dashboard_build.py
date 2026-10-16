@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -27,12 +28,24 @@ CHAIN = {"robinhood": "robinhood", "arc": "arc"}
 
 
 def best_pair(chain: str, token: str) -> str:
-    r = httpx.get(f"https://api.dexscreener.com/latest/dex/tokens/{token}", timeout=30).json()["pairs"]
-    ps = [p for p in r if p["chainId"] == chain and p["baseToken"]["address"].lower() == token.lower() and p.get("liquidity")]
-    return max(ps, key=lambda p: p["liquidity"]["usd"])["pairAddress"]
+    """The token's deepest DexScreener pair (for its chart). Retries; "" if DexScreener does not answer, so a hiccup there
+    costs one hour's chart for that coin instead of the whole build."""
+    for attempt in range(4):
+        try:
+            r = httpx.get(f"https://api.dexscreener.com/latest/dex/tokens/{token}", timeout=30).json()["pairs"] or []
+            ps = [p for p in r if p["chainId"] == chain and p["baseToken"]["address"].lower() == token.lower() and p.get("liquidity")]
+            if ps:
+                return max(ps, key=lambda p: p["liquidity"]["usd"])["pairAddress"]
+        except Exception:
+            pass
+        time.sleep(3 * (attempt + 1))
+    print(f"warning: no DexScreener pair for {token} this hour")
+    return ""
 
 
 def series(ledger: Path, now: float, hours: int = 8 * 24) -> list[list[float]]:
+    if not ledger.exists():
+        return []
     con = duckdb.connect()
     rows = con.execute(f"select ts, price_usd from '{ledger}' where usd>=5 and ts>{now - hours * 3600 - 86400} order by block, log_index").fetchall()
     out, j, last = [], 0, None
@@ -69,52 +82,91 @@ def onchain(url: str, token: str, wallets: list[str], dec: int) -> float:
     return tot / 10 ** dec
 
 
-def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, chain_qty: dict) -> tuple[list[dict], list[dict]]:
-    """Replay the wallets since the positions file's baseline (scripts/advance_baseline.js, the Scan button's code) and move
-    the baseline to the current block. Returns the holdings to show: replayed quantities, costs and sold stats; coins bought
-    since then are added (if DexScreener lists them and they are worth at least $0.50), coins sold out move to `closed`.
-    If the replay fails, the positions file is used as it is and the page's Scan covers the gap."""
+STATE = ROOT / "data/coinboard_replay_state.json"   # kept with the archives (the workflow's cache)
+
+
+def _replay(cfg_file: Path, env: dict) -> dict | None:
+    try:
+        r = subprocess.run(["node", str(ROOT / "scripts/advance_baseline.js"), str(cfg_file)], capture_output=True, text=True,
+                           timeout=900, env=env, check=True)
+        return json.loads(r.stdout)
+    except Exception as e:
+        print(f"warning: wallet replay failed ({(getattr(e, 'stderr', '') or str(e)).strip()[:200]})")
+        return None
+
+
+def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, chain_qty: dict, pos_hash: str) -> tuple[list[dict], list[dict]]:
+    """Replay the wallets (scripts/advance_baseline.js, the Scan button's code) and move the baseline to the current block.
+    Starts from the point the last run reached (STATE, valid while the positions file is unchanged), else from the positions
+    file's own baseline. The result must agree with the balances this build read itself, else the positions file is shown
+    as it is. Returns the holdings to show: replayed quantities, costs and sold stats; coins bought since then are added
+    (if DexScreener lists them and they are worth at least $0.50), coins sold out move to `closed`."""
     env = dict(os.environ)
     if env.get("HTTPS_PROXY"):                       # local runs behind the session proxy; CI has no proxy
         env.setdefault("NODE_USE_ENV_PROXY", "1")
         if Path("/root/.ccr/ca-bundle.crt").exists():
             env.setdefault("NODE_EXTRA_CA_CERTS", "/root/.ccr/ca-bundle.crt")
-    backup = cfg_file.read_text()
+    from_positions = cfg_file.read_text()
+
+    def agrees(res: dict) -> bool:
+        rq = {(h["chain"], h["token"].lower()): h["qty"] for h in res["holdings"]}
+        bad = [f"{c['name']} replay {rq.get(k, 0):,.4f} vs chain {q:,.4f}" for c in coins
+               for k in [(c["chain"], c["token"].lower())] for q in [chain_qty.get(k)]
+               if q is not None and abs(rq.get(k, 0) - q) > max(0.01, 0.005 * q)]
+        if bad:
+            print("warning: replay disagrees with on-chain balances (" + "; ".join(bad) + ")")
+        fixed = [n for n in res.get("notes", []) if "differs from the replay" in n]
+        if fixed:                                    # the replay itself missed something: do not trust its costs
+            print("warning: replay needed balance corrections (" + "; ".join(fixed) + ")")
+        return not bad and not fixed
+
+    res = None
     try:
-        r = subprocess.run(["node", str(ROOT / "scripts/advance_baseline.js"), str(cfg_file)], capture_output=True, text=True,
-                           timeout=900, env=env, check=True)
-        res = json.loads(r.stdout)
-    except Exception as e:
-        cfg_file.write_text(backup)
-        err = getattr(e, "stderr", "") or str(e)
-        print(f"warning: wallet replay failed, showing the positions file as it is ({err.strip()[:200]})")
+        st = json.loads(STATE.read_text()) if STATE.exists() else None
+    except Exception:
+        st = None
+    if st and st.get("positions") == pos_hash:
+        cfg = json.loads(from_positions)
+        for k, ch in st["chains"].items():
+            if k in cfg["chains"] and ch["baseBlock"] >= cfg["chains"][k]["baseBlock"]:
+                cfg["chains"][k]["baseBlock"], cfg["chains"][k]["baseline"] = ch["baseBlock"], ch["baseline"]
+        cfg_file.write_text(json.dumps(cfg))
+        res = _replay(cfg_file, env)
+        if res is not None and not agrees(res):
+            res = None
+        if res is None:
+            print("replay from the saved point failed; replaying from the positions file instead")
+    if res is None:
+        cfg_file.write_text(from_positions)
+        res = _replay(cfg_file, env)
+        if res is not None and not agrees(res):
+            res = None
+    if res is None:
+        cfg_file.write_text(from_positions)
+        print("warning: showing the positions file as it is")
         return coins, closed
+    try:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        STATE.write_text(json.dumps({"positions": pos_hash, "chains": {k: {"baseBlock": ch["baseBlock"], "baseline": ch["baseline"]}
+                                                                       for k, ch in json.loads(cfg_file.read_text())["chains"].items()}}))
+    except Exception as e:
+        print(f"warning: could not save the replay point ({e})")
     for n in res.get("notes", []):
         print("replay note:", n)
-    # safety: the replay must agree with the balances this build read itself a moment ago; otherwise keep the positions file
-    rq = {(h["chain"], h["token"].lower()): h["qty"] for h in res["holdings"]}
-    bad = [f"{c['name']} replay {rq.get(k, 0):,.4f} vs chain {q:,.4f}" for c in coins
-           for k in [(c["chain"], c["token"].lower())] for q in [chain_qty.get(k)]
-           if q is not None and abs(rq.get(k, 0) - q) > max(0.01, 0.005 * q)]
-    if bad:
-        cfg_file.write_text(backup)
-        print("warning: replay disagrees with on-chain balances (" + "; ".join(bad) + "); showing the positions file as it is")
-        return coins, closed
     by = {(c["chain"], c["token"].lower()): c for c in coins}
     shown, gone = [], []
     for h in res["holdings"]:
         k = (h["chain"], h["token"].lower())
         c = by.get(k)
         if c is None:                                 # bought since the baseline
+            pair = best_pair(h["chain"], h["token"])
             try:
-                r2 = httpx.get(f"https://api.dexscreener.com/latest/dex/tokens/{h['token']}", timeout=30).json()["pairs"] or []
-                ps = [p for p in r2 if p["chainId"] == h["chain"] and p["baseToken"]["address"].lower() == h["token"].lower() and p.get("liquidity")]
-                best = max(ps, key=lambda p: p["liquidity"]["usd"]) if ps else None
+                px = float(next(p for p in httpx.get(f"https://api.dexscreener.com/latest/dex/pairs/{h['chain']}/{pair}", timeout=30).json()["pairs"])["priceUsd"]) if pair else 0
             except Exception:
-                best = None
-            if not best or h["qty"] * float(best["priceUsd"] or 0) < 0.5:
+                px = 0
+            if not pair or h["qty"] * px < 0.5:
                 continue                              # unlisted or dust: hidden, as on the page
-            c = {"name": h["symbol"], "symbol": h["symbol"], "chain": h["chain"], "token": h["token"], "pair": best["pairAddress"],
+            c = {"name": h["symbol"], "symbol": h["symbol"], "chain": h["chain"], "token": h["token"], "pair": pair,
                  "hist": [], "bought": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(now))}
             print(f"replay: new holding {h['symbol']} {h['qty']:,.4f}")
         c = {**c, "qty": h["qty"], "cost": round(h["cost"], 2), "soldQty": h["soldQty"], "soldProceeds": h["soldProceeds"],
@@ -188,7 +240,7 @@ def main() -> int:
     out = a.out
     (out / "api").mkdir(parents=True, exist_ok=True)
     (out / "api/_config.json").write_text(json.dumps(api))
-    coins, closed = advance(out / "api/_config.json", coins, closed, now, chain_qty)
+    coins, closed = advance(out / "api/_config.json", coins, closed, now, chain_qty, hashlib.sha256(Path(a.positions).read_bytes()).hexdigest())
     for f in ("scan.js", "refresh.js"):
         shutil.copy(ROOT / "dashboard/api" / f, out / "api" / f)
     (out / "vercel.json").write_text(json.dumps({
