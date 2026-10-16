@@ -51,8 +51,12 @@ CHAINS = {
 
 
 def rpc(url: str, method: str, params: list):
-    r = httpx.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=60).json()
-    return r["result"]
+    for attempt in range(4):
+        try:
+            return httpx.post(url, json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params}, timeout=60).json()["result"]
+        except Exception:
+            time.sleep(2 * (attempt + 1))
+    raise RuntimeError("rpc failed")
 
 
 def onchain(url: str, token: str, wallets: list[str], dec: int) -> float:
@@ -82,7 +86,11 @@ def main() -> int:
                       "pair": best_pair(p["chain"], p["token"]), "hist": series(ROOT / p["ledger"], now), "bought": p.get("bought")})
         base[p["chain"]].append({"name": p["name"], "token": p["token"], "qty": p["qty"], "cost": p["cost"], "dec": dec,
                                  "soldQty": sq, "soldProceeds": sp, "realised": real})
-        oc = onchain(CHAINS[p["chain"]]["rpc"], p["token"], wallets[p["chain"]], dec)
+        try:
+            oc = onchain(CHAINS[p["chain"]]["rpc"], p["token"], wallets[p["chain"]], dec)
+        except Exception:
+            print(f"{p['name']:7} on-chain check skipped (RPC busy)")
+            continue
         flag = "" if abs(oc - p["qty"]) <= max(0.01, p["qty"] * 0.002) else "   <-- MISMATCH, fix positions.json before deploying"
         print(f"{p['name']:7} positions {p['qty']:>16,.4f}  on-chain {oc:>16,.4f}{flag}")
     mkt = {}
