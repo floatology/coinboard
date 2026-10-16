@@ -87,8 +87,15 @@ def main() -> int:
         print(f"{p['name']:7} positions {p['qty']:>16,.4f}  on-chain {oc:>16,.4f}{flag}")
     mkt = {}
     for cid in ("bitcoin", "ethereum"):
-        j = httpx.get(f"https://api.coingecko.com/api/v3/coins/{cid}/market_chart", params={"vs_currency": "usd", "days": 8}, timeout=30).json()
-        mkt[cid] = [[int(x[0] / 1000), x[1]] for x in j["prices"]]
+        for attempt in range(4):
+            try:
+                j = httpx.get(f"https://api.coingecko.com/api/v3/coins/{cid}/market_chart", params={"vs_currency": "usd", "days": 8}, timeout=30).json()
+                mkt[cid] = [[int(x[0] / 1000), x[1]] for x in j["prices"]]
+                break
+            except Exception:
+                time.sleep(8 * (attempt + 1))
+        else:
+            print(f"warning: no {cid} history from CoinGecko; the page will fetch it live")
     closed = []
     for c in cfg.get("closed", []):
         dec = 18
