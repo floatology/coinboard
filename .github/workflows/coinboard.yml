@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
 concurrency:
   group: coinboard
-  cancel-in-progress: false
+  cancel-in-progress: true    # a newer run (new code, the hourly schedule or the page button) replaces an older one
 jobs:
   refresh:
     runs-on: ubuntu-latest
