@@ -24,14 +24,25 @@ PM_RH = "0x8366a39cc670b4001a1121b8f6a443a643e40951"      # Uniswap v4 PoolManag
 NET_PROTOCOL = {"0xb078cc304a0b264c5f3680dc0488954accd02e87", "0x04822ea321a0dee6f40656172f29312104855d66", "0x3bb7a23316f82c0e984fa2e784846d8928a35f42",
                 "0x575b7b7c97ef3e21c82daeb427899d583e1e913f", "0xff32a969a0c567129eecd926d04657728e1980c1", "0x92166e94eea5b7799b761653881692f881dfc4c9",
                 "0x346e1a31171a0f7ac73909010b5435768d3b5462", "0x79e71f8a8a2912e40687a8820b2dc0fdd2f686b3", "0x086c58400b8708ef993f256e12e752dcf0ac918e",
-                "0x59f95461e68e0c77605299791e1449f175165b54", "0x99e70a5b06" }
-# per coin: archive dir, decimals, supply, bucket thresholds (% of supply: whale, medium), extra excluded addresses
-COINS = {
-    "WALLET": dict(dir="data/tokens/0x0339f5459fc690ac85f1782e15782a151b4a9e1b", dec=18, supply=1e9, th=(0.25, 0.02), excl={PM_RH, "0x9501a20bedb8bea0798fe5d4c411f5e270965d49"}),
-    "FAZE": dict(dir="data/arc/0x394d38f807ee0027a182216f5e67a15ae441fa2e", dec=18, supply=1e9, th=(0.25, 0.02), excl={PM_RH, "0x6a62919ccbf0c19e0c4e084f986b582b4492dda4"}),
-    "AF": dict(dir="data/arc/0x75d658f8101fbe6dc217fbba7e20a0312af5fa2e", dec=18, supply=1e9, th=(0.25, 0.02), excl={PM_RH, "0x6a62919ccbf0c19e0c4e084f986b582b4492dda4"}),
-    "NET": dict(dir="data/tokens/0xca9c78dd337a67f6e0077f65f5e9218719d30edf", dec=9, supply=154828.4, th=(0.05, 0.01), excl=NET_PROTOCOL | {PM_RH}),
+                "0x59f95461e68e0c77605299791e1449f175165b54", "0x99e70a5b06215e5d2f3bec773b4f59c008fc1673"}
+# Settings that differ from the defaults, by token. Any other coin gets: whale >= 0.25% of supply, medium >= 0.02%, and
+# its pools / pairs (from the archive's metadata) excluded. Supply is read from the archive (minted - burned - dead).
+KNOWN = {
+    "0x0339f5459fc690ac85f1782e15782a151b4a9e1b": dict(name="WALLET", chain="robinhood", dec=18, excl={"0x9501a20bedb8bea0798fe5d4c411f5e270965d49"}),
+    "0x394d38f807ee0027a182216f5e67a15ae441fa2e": dict(name="FAZE", chain="arc", dec=18, excl={"0x6a62919ccbf0c19e0c4e084f986b582b4492dda4"}),
+    "0x75d658f8101fbe6dc217fbba7e20a0312af5fa2e": dict(name="AF", chain="arc", dec=18, excl={"0x6a62919ccbf0c19e0c4e084f986b582b4492dda4"}),
+    "0xca9c78dd337a67f6e0077f65f5e9218719d30edf": dict(name="NET", chain="robinhood", dec=9, th=(0.05, 0.01), excl=NET_PROTOCOL,
+                                                       note="Unstaked NET only; 91% of NET is staked and not shown."),
 }
+
+
+def coin_config(c: dict) -> dict:
+    tok = c["token"].lower()
+    k = KNOWN.get(tok, {})
+    chain = c.get("chain") or k.get("chain")
+    return dict(name=c.get("name") or k.get("name"), dir=f"data/{'arc' if chain == 'arc' else 'tokens'}/{tok}",
+                dec=c.get("dec") or k.get("dec", 18), th=k.get("th", (0.25, 0.02)), excl=set(k.get("excl", set())) | {PM_RH},
+                note=k.get("note", ""))
 
 
 def analyse(name: str, cfg: dict, days: int) -> dict:
@@ -52,7 +63,11 @@ def analyse(name: str, cfg: dict, days: int) -> dict:
     meta_p = d / "meta.json"
     if meta_p.exists():
         m = json.loads(meta_p.read_text())
-        excl |= {a.lower() for a in m.get("pair_addrs", [])} | {a.lower() for a in m.get("v3_pools", {})}
+        excl |= {a.lower() for a in m.get("pair_addrs", [])} | {a.lower() for a in m.get("v3_pools", {})} | \
+                {a.lower() for a in m.get("other_pairs", [])} | {a.lower() for a in m.get("pools", {}) if len(a) == 42}
+    pools_p = d / "pools.json"
+    if pools_p.exists():
+        excl |= {a.lower() for a in json.loads(pools_p.read_text()) if len(a) == 42}
     # daily trade stats
     daily = {}
     for ts, b, side, usd, px in led:
@@ -69,7 +84,9 @@ def analyse(name: str, cfg: dict, days: int) -> dict:
     snaps = []
     ds = list(range(day0, int(now // 86400) + 1))
     nxt = 0
-    sup = cfg["supply"]
+    sup = con.execute(f"""select (sum(case when src in ('{ZERO}','{DEAD}') then cast(value as hugeint) else 0 end)
+                               - sum(case when dst in ('{ZERO}','{DEAD}') then cast(value as hugeint) else 0 end)) / 1e{cfg['dec']}
+                           from '{d}/transfers.parquet'""").fetchone()[0] or 1
     wh, md = cfg["th"][0] / 100 * sup, cfg["th"][1] / 100 * sup
     holder_floor = 1e-6 * sup
 
@@ -133,19 +150,30 @@ def analyse(name: str, cfg: dict, days: int) -> dict:
     read.append(f"Volume is {'up' if vol7 > volp else 'down'} {abs(vol7 / volp - 1) * 100:.0f}% on the prior week; buys are {bs7:.2f}x sells.")
     read.append(f"Holders {r[-1]['holders']:,} ({r[-1]['holders'] - pick(-8)['holders']:+,} in 7 days); top 10 hold {r[-1]['top10']:.1f}% of supply.")
     return {"rows": r, "ath": ath, "athT": ath_h * 3600, "supply": round(supply, 4), "athMcap": round(ath * (sup_ath if sup_ath is not None else supply)), "px": px_now, "w7": round(w7, 3), "n7": round(n7, 3), "m7": round(m7, 3), "vol7": round(vol7), "volPrev": round(volp),
-            "read": read, "note": "Unstaked NET only; 91% of NET is staked and not shown." if name == "NET" else ""}
+            "read": read, "note": cfg.get("note", "")}
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, default=ROOT / "dashboard/site/analytics.json")
     ap.add_argument("--days", type=int, default=45)
+    ap.add_argument("--coins", type=Path, help="JSON list of {name, chain, token, dec}; default: the known coins")
     a = ap.parse_args()
+    coins = json.loads(a.coins.read_text()) if a.coins and a.coins.exists() else [{"token": t, **k} for t, k in KNOWN.items()]
     out = {"built": int(time.time()), "coins": {}}
-    for n, c in COINS.items():
+    for c in coins:
+        cfg = coin_config(c)
+        d = ROOT / cfg["dir"]
+        if not ((d / "ledger.parquet").exists() and (d / "transfers.parquet").exists()):
+            print(cfg["name"], "skipped: no archive yet")
+            continue
         t = time.time()
-        out["coins"][n] = analyse(n, c, a.days)
-        print(n, f"{time.time() - t:.0f}s", out["coins"][n]["read"][0])
+        try:
+            out["coins"][cfg["name"]] = analyse(cfg["name"], cfg, a.days)
+        except Exception as e:                       # one coin's problem must not cost the others their analytics
+            print(cfg["name"], "FAILED:", e)
+            continue
+        print(cfg["name"], f"{time.time() - t:.0f}s", out["coins"][cfg["name"]]["read"][0])
     a.out.parent.mkdir(parents=True, exist_ok=True)
     a.out.write_text(json.dumps(out, separators=(",", ":")))
     print("wrote", a.out, a.out.stat().st_size // 1024, "KB")

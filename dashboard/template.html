@@ -85,10 +85,12 @@ h1.logo img{height:62px}@media(max-width:520px){h1.logo img{height:36px}}
 .glance .gr span{text-align:right;font-weight:600}.glance .gh span{cursor:pointer;padding:4px 0;-webkit-tap-highlight-color:transparent}.glance .gh span.on{color:var(--accent)!important;font-weight:700!important}.glance .gr span.sel{background:rgba(45,226,230,.07);border-radius:4px;padding-right:3px}.glance .gr b{cursor:pointer;text-align:left;font:700 12px var(--display);color:var(--head)}.glance .gh span,.glance .gh b{font-weight:500;color:var(--muted)}}
 @media(max-width:360px){.tiles .r{padding:8px 8px}.tiles .r span{font-size:14px}}
 @media(max-width:360px){.glance{padding:6px 8px}.glance .gr{grid-template-columns:1.1fr 40px repeat(4,1fr);gap:3px;font-size:11px}.glance .gr b{font-size:11px}}
+.hero .vchart{position:absolute;z-index:2;left:50%;transform:translateX(-50%);bottom:8px;width:250px;height:42px;background:rgba(13,2,33,.7);border-radius:8px;padding:3px 6px;display:none}
+@media(max-width:520px){.hero .vchart{width:200px;height:36px;bottom:6px}}
 </style>
 </head>
 <body>
-<div class="hero"><div class="horizon"><div class="palms"></div></div><div class="total" id="total"></div>
+<div class="hero"><div class="horizon"><div class="palms"></div></div><div class="total" id="total"></div><div class="vchart" id="vchart"></div>
 <header>
   <h1 class="logo"><img src="__LOGO__" alt="Avava Labs"></h1>
   <div class="actions"><button id="scan">Scan wallets</button></div>
@@ -105,7 +107,7 @@ h1.logo img{height:62px}@media(max-width:520px){h1.logo img{height:36px}}
   <section id="tab-watchlist" hidden>
     <div class="search"><input id="q" placeholder="Search a coin name, ticker or contract address" autocomplete="off"><button id="go" style="background:var(--chip);color:var(--ink)">Search</button></div>
     <div class="res" id="res" hidden></div>
-    <div class="grid" id="wgrid"></div><p class="small" id="wempty">Nothing here yet. Search for a coin above and press Add. The list is saved in this browser.</p>
+    <div class="grid" id="wgrid"></div><p class="small" id="wempty">Nothing here yet. Search for a coin above and press Add.</p>
   </section>
 </main>
 <footer id="foot"></footer>
@@ -216,6 +218,13 @@ function spark(c){ const H=hist[key(c)]||[], now=Date.now()/1000, p=prices[key(c
   const lo=Math.min(...pts), hi=Math.max(...pts), W=60, Hh=18, X=i=>(i/(pts.length-1)*W).toFixed(1), Y=v=>(hi===lo?Hh/2:1.5+(1-(v-lo)/(hi-lo))*(Hh-3)).toFixed(1);
   const col=pts.at(-1)>=pts[0]?"#4ae8b0":"#ff4d5e";
   return `<i style="display:flex;align-items:center"><svg width="100%" height="${Hh}" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" aria-hidden="true" style="display:block;overflow:visible"><path d="${pts.map((v,i)=>(i?"L":"M")+X(i)+" "+Y(v)).join("")}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg></i>`; }
+// portfolio value over time (recorded by the hourly build) with the live value as the last point, in the banner
+function renderValue(V){ const el=$("#vchart"); if(!el) return; const pts=(DATA.vhist||[]).slice(); if(V>0) pts.push([Date.now()/1000,V]);
+  if(pts.length<3){ el.style.display="none"; return; } el.style.display="block";
+  const W=240, H=36, ys=pts.map(p=>p[1]), lo=Math.min(...ys), hi=Math.max(...ys), x0=pts[0][0], x1=pts.at(-1)[0];
+  const X=t=>((t-x0)/(x1-x0||1)*W).toFixed(1), Y=v=>(hi===lo?H/2:2+(1-(v-lo)/(hi-lo))*(H-4)).toFixed(1);
+  const d=pts.map((p,i)=>(i?"L":"M")+X(p[0])+" "+Y(p[1])).join("");
+  el.innerHTML=`<svg width="100%" height="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Portfolio value over time"><defs><linearGradient id="vg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2de2e6" stop-opacity=".35"/><stop offset="1" stop-color="#2de2e6" stop-opacity="0"/></linearGradient></defs><path d="${d}L${W} ${H}L0 ${H}Z" fill="url(#vg)"/><path d="${d}" fill="none" stroke="#2de2e6" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>`; }
 let gsort=store.get("gsort",24);   // glance strip: sorted by the biggest move (up or down) over this many hours; tap a heading to change
 function renderGlance(){ const G=[["1h",1],["6h",6],["12h",12],["24h",24]], g=$("#glance"); if(!g) return;
   const rows=holdings.map(c=>{ const p=prices[key(c)]??c.px??(hist[key(c)]||[[0,0]]).at(-1)[1];
@@ -235,7 +244,7 @@ function renderPortfolio(){
     const avgb=c.cost/c.qty, avgs=c.soldQty>0?c.soldProceeds/c.soldQty:null;
     q("avg").innerHTML=`<span>Avg buy <b>${fmtPrice(avgb)}</b></span>${avgs?`<span>Avg sell <b>${fmtPrice(avgs)}</b></span><span>Realised <b class="${cls(c.realised)}">${c.realised>=0?"+":"−"}${fmtUSD(Math.abs(c.realised))}</b></span>`:""}<span>Holding <b>${c.qty.toLocaleString("en-US",{maximumFractionDigits:2})}</b></span>`;
   });
-  renderGlance();
+  renderGlance(); renderValue(V);
   const pl=V-C;
   $("#total").innerHTML=`<span class="big">${fmtUSD(V)}</span><span class="sub"><b class="${cls(pl)}">${fmtPct(V/C-1)}</b></span>`;
 }
@@ -285,7 +294,12 @@ async function buildAnalytics(){
 }
 
 /* ---------- watchlist ---------- */
-let watch = store.get("watch",[]);
+let watch = store.get("watch",[]), watchSync=false;
+// the watchlist lives on the server when a database is connected (shared by all your devices), else in this browser
+const saveWatch=()=>{ store.set("watch",watch); if(watchSync) fetch("api/watch",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({watch:watch.map(({chain,token,symbol,pair})=>({chain,token,symbol,pair}))}),signal:AbortSignal.timeout(10000)}).catch(()=>{}); };
+async function loadWatch(){ try{ const r=await fetch("api/watch",{signal:AbortSignal.timeout(10000)}); if(!r.ok) return; const j=await r.json(); watchSync=true;
+    const server=j.watch||[], k=c=>c.chain+":"+c.token.toLowerCase(), have=new Set(server.map(k)), extra=watch.filter(c=>!have.has(k(c)));
+    watch=[...server,...extra]; store.set("watch",watch); if(extra.length||j.watch===null) saveWatch(); buildWatch(); renderWatch(); refresh(); }catch(e){} }
 function buildWatch(){
   const g=$("#wgrid"); g.innerHTML=""; $("#wempty").style.display=watch.length?"none":"";
   watch.forEach(c=>{
@@ -295,7 +309,7 @@ function buildWatch(){
     <div class="chart dx"><iframe data-src="${esc(embed(c))}" title="chart"></iframe></div>`;
     g.appendChild(el); geckoHist(c);
   });
-  g.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{ watch=watch.filter(c=>key(c)!==b.dataset.rm); store.set("watch",watch); buildWatch(); renderWatch(); });
+  g.querySelectorAll("[data-rm]").forEach(b=>b.onclick=()=>{ watch=watch.filter(c=>key(c)!==b.dataset.rm); saveWatch(); buildWatch(); renderWatch(); });
 }
 function renderWatch(){
   watch.forEach(c=>{ const el=document.querySelector(`#wgrid .card[data-k="${CSS.escape(key(c))}"]`), i=info[key(c)]; if(!el) return; const p=prices[key(c)]??(i?parseFloat(i.priceUsd):null); if(p==null) return;
@@ -308,7 +322,7 @@ async function doSearch(){
     const seen=new Set(), ps=(j.pairs||[]).filter(p=>p.liquidity&&p.liquidity.usd>1000).sort((a,b)=>b.liquidity.usd-a.liquidity.usd).filter(p=>{const k=p.chainId+p.baseToken.address.toLowerCase(); if(seen.has(k)) return false; seen.add(k); return true;}).slice(0,10);
     res.innerHTML=ps.length?ps.map((p,i)=>`<div><span><b>${esc(p.baseToken.symbol)}</b> ${esc(p.baseToken.name)} <span class="small">${esc(p.chainId)} · ${fmtPrice(parseFloat(p.priceUsd))} · liq $${short(p.liquidity.usd)} · 24h ${p.priceChange?.h24??0}%</span></span><button data-i="${i}">Add</button></div>`).join(""):'<div>Nothing found with liquidity.</div>';
     res.querySelectorAll("button").forEach(b=>b.onclick=()=>{ const p=ps[+b.dataset.i]; const c={chain:p.chainId,token:p.baseToken.address,symbol:p.baseToken.symbol,pair:p.pairAddress};
-      if(!watch.find(x=>key(x)===key(c))){ watch.push(c); store.set("watch",watch); } info[key(c)]=p; buildWatch(); watchFrames(); renderWatch(); res.hidden=true; $("#q").value=""; });
+      if(!watch.find(x=>key(x)===key(c))){ watch.push(c); saveWatch(); } info[key(c)]=p; buildWatch(); watchFrames(); renderWatch(); res.hidden=true; $("#q").value=""; });
   }catch(e){ res.innerHTML="<div>Search failed. Try again.</div>"; }
 }
 
@@ -367,7 +381,7 @@ const fobs=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting&&e.i
 const _bw=buildWatch, _bp=buildPortfolio, _bm=buildMarket; buildWatch=function(){ _bw(); watchFrames(); }; buildPortfolio=function(){ _bp(); watchFrames(); }; buildMarket=function(){ _bm(); watchFrames(); };
 function watchFrames(){ live=live.filter(f=>f.isConnected); document.querySelectorAll("iframe[data-src]").forEach(f=>{ if(!f.dataset.seen){ f.dataset.seen="1"; fobs.observe(f); } }); }
 buildPortfolio(); buildMarket(); renderMarket(); buildWatch(); render(); refresh(); setInterval(refresh,30000);
-holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); loadMarket(); setInterval(loadMarket,300000);
+holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); loadMarket(); setInterval(loadMarket,300000); loadWatch();
 </script>
 </body>
 </html>

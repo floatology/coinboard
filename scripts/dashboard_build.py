@@ -83,6 +83,55 @@ def onchain(url: str, token: str, wallets: list[str], dec: int) -> float:
 
 
 STATE = ROOT / "data/coinboard_replay_state.json"   # kept with the archives (the workflow's cache)
+VALUES = ROOT / "data/coinboard_value_history.json"  # the portfolio's value, recorded by every build (private: not backed up)
+
+
+def _ts(s: str | None) -> float | None:
+    try:
+        return time.mktime(time.strptime(s, "%Y-%m-%dT%H:%MZ")) - time.timezone if s else None
+    except Exception:
+        return None
+
+
+def value_history(coins: list[dict], cfg: dict, now: float) -> list[list[float]]:
+    """Every build appends [time, value, cost] for the holdings it shows. The first build backfills hourly from the last
+    trade in the positions file (holdings were unchanged since, so value = quantities x the hourly price history)."""
+    def price_at(c: dict, t: float) -> float | None:
+        p = None
+        for ts, px in c.get("hist") or []:
+            if ts <= t:
+                p = px
+            else:
+                break
+        return p
+    try:
+        hist = json.loads(VALUES.read_text()) if VALUES.exists() else []
+    except Exception:
+        hist = []
+    if not hist:
+        trades = [_ts(p.get("bought")) for p in cfg.get("positions", [])] + [_ts(x.get("sold_at")) for x in cfg.get("partial_sales", []) + cfg.get("closed", [])]
+        trades = [t for t in trades if t]
+        if trades:
+            t = (int(max(trades)) // 3600 + 1) * 3600
+            while t < now - 600:
+                pxs = [price_at(c, t) for c in coins]
+                if all(p is not None for p in pxs):
+                    hist.append([t, round(sum(c["qty"] * p for c, p in zip(coins, pxs)), 2), round(sum(c["cost"] for c in coins), 2)])
+                t += 3600
+    pxs = [price_at(c, now) for c in coins]
+    if coins and all(p is not None for p in pxs):
+        point = [int(now), round(sum(c["qty"] * p for c, p in zip(coins, pxs)), 2), round(sum(c["cost"] for c in coins), 2)]
+        if hist and now - hist[-1][0] < 1800:
+            hist[-1] = point
+        else:
+            hist.append(point)
+    hist = [h for h in hist if h[0] >= now - 120 * 86400]
+    try:
+        VALUES.write_text(json.dumps(hist))
+    except Exception as e:
+        print(f"warning: could not save the value history ({e})")
+    step = max(1, len(hist) // 400)
+    return [h[:2] for h in hist[::step]] + ([hist[-1][:2]] if hist and (len(hist) - 1) % step else [])
 
 
 def _replay(cfg_file: Path, env: dict) -> dict | None:
@@ -166,8 +215,9 @@ def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, c
                 px = 0
             if not pair or h["qty"] * px < 0.5:
                 continue                              # unlisted or dust: hidden, as on the page
+            led = ROOT / f"data/{'arc' if h['chain'] == 'arc' else 'tokens'}/{h['token'].lower()}/ledger.parquet"
             c = {"name": h["symbol"], "symbol": h["symbol"], "chain": h["chain"], "token": h["token"], "pair": pair,
-                 "hist": [], "bought": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(now))}
+                 "hist": series(led, now), "bought": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(now))}
             print(f"replay: new holding {h['symbol']} {h['qty']:,.4f}")
         c = {**c, "qty": h["qty"], "cost": round(h["cost"], 2), "soldQty": h["soldQty"], "soldProceeds": h["soldProceeds"],
              "realised": round(h["realised"], 2), "dec": h["dec"]}
@@ -241,15 +291,20 @@ def main() -> int:
     (out / "api").mkdir(parents=True, exist_ok=True)
     (out / "api/_config.json").write_text(json.dumps(api))
     coins, closed = advance(out / "api/_config.json", coins, closed, now, chain_qty, hashlib.sha256(Path(a.positions).read_bytes()).hexdigest())
-    for f in ("scan.js", "refresh.js"):
+    vhist = value_history(coins, cfg, now)
+    try:
+        (ROOT / "data/coinboard_shown.json").write_text(json.dumps([{"name": c["name"], "chain": c["chain"], "token": c["token"], "dec": c.get("dec", 18)} for c in coins]))
+    except Exception as e:
+        print(f"warning: could not save the shown holdings ({e})")
+    for f in ("scan.js", "refresh.js", "watch.js"):
         shutil.copy(ROOT / "dashboard/api" / f, out / "api" / f)
     (out / "vercel.json").write_text(json.dumps({
-        "functions": {"api/scan.js": {"maxDuration": 60}, "api/refresh.js": {"maxDuration": 15}},
+        "functions": {"api/scan.js": {"maxDuration": 60}, "api/refresh.js": {"maxDuration": 15}, "api/watch.js": {"maxDuration": 15}},
         "headers": [{"source": "/(.*)", "headers": [{"key": "X-Robots-Tag", "value": "noindex, nofollow"}, {"key": "Cache-Control", "value": "no-store"}]}]}))
     an = out / "analytics.json"
     an_data = json.loads(an.read_text()) if an.exists() else {"coins": {}}
     logo = "data:image/png;base64," + base64.b64encode((ROOT / "dashboard/logo.png").read_bytes()).decode()
-    html = ((ROOT / "dashboard/template.html").read_text().replace("__LOGO__", logo).replace("__DATA__", json.dumps({"built": int(now), "coins": coins, "closed": closed, "mkt": mkt}))
+    html = ((ROOT / "dashboard/template.html").read_text().replace("__LOGO__", logo).replace("__DATA__", json.dumps({"built": int(now), "coins": coins, "closed": closed, "mkt": mkt, "vhist": vhist}))
             .replace("__ANALYTICS__", json.dumps(an_data)))
     (out / "index.html").write_text(html)
     print(f"wrote {out / 'index.html'} ({len(html) / 1024:.0f} KB), {len(coins)} coins, built {time.strftime('%H:%M UTC', time.gmtime(now))}")

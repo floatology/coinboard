@@ -74,7 +74,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$(date -u +%H)" = "03" ] || ! gh release view archive-backup >/dev/null 2>&1; then
-            tar --exclude=data/coinboard_replay_state.json -c data | zstd -T0 -10 -q -o /tmp/data.tar.zst
+            tar --exclude=data/coinboard_replay_state.json --exclude=data/coinboard_value_history.json -c data | zstd -T0 -10 -q -o /tmp/data.tar.zst
             gh release view archive-backup >/dev/null 2>&1 || gh release create archive-backup --title "Archive backup" \
               --notes "Daily copy of the trade archives (public chain data) so the hourly job can recover if its cache is lost."
             gh release upload archive-backup /tmp/data.tar.zst --clobber
