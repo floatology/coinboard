@@ -91,6 +91,14 @@ def main() -> int:
     cfg = json.loads(Path(a.positions).read_text())
     t0 = time.time()
     coins = [c for c in held_coins(cfg) if TOKEN.fullmatch(c["token"].lower())]
+    try:   # the watchlist's Robinhood Chain and Arc coins get archives too, for their whale alerts (not analytics)
+        from coinboard_alerts import watchlist
+        held = {(c["chain"], c["token"].lower()) for c in coins}
+        watch = [dict(w, watch=True) for w in watchlist() if w["chain"] in ("arc", "robinhood")
+                 and TOKEN.fullmatch(w["token"].lower()) and (w["chain"], w["token"].lower()) not in held]
+    except Exception as e:
+        print(f"warning: could not read the watchlist ({e})")
+        watch = []
 
     def refresh(c: dict) -> tuple[str, str]:
         """One coin's archive refresh: its commands in order, as argument lists (never through a shell: token symbols
@@ -112,8 +120,11 @@ def main() -> int:
         return "ok", ""
 
     bad = []
-    with ThreadPoolExecutor(max_workers=max(1, len(coins))) as ex:
-        for c, (status, err) in zip(coins, ex.map(refresh, coins)):
+    with ThreadPoolExecutor(max_workers=max(1, len(coins + watch))) as ex:
+        for c, (status, err) in zip(coins + watch, ex.map(refresh, coins + watch)):
+            if c.get("watch"):                      # the watchlist stays out of the (public) log
+                say(f"refresh a watchlist coin: {status}")
+                continue
             say(f"refresh {c['name']}: {status}")
             if status == "FAILED":
                 bad.append(c["name"])

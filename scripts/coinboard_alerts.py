@@ -4,16 +4,18 @@
     coinboard_alerts.py tick     # every 5 minutes (the alerts workflow): price moves, liquidity pulls, the daily summary
     coinboard_alerts.py hourly   # every hour, after the archive refresh: whales selling or buying
 
-  price      a held coin, or one on the page's watchlist, moving 10% or more over 6, 12 or 24 hours: one message per coin
-             with all three changes. A window alerts again only after its own length, or 10 points further the same way,
-             or when the move turns. The watchlist is read from the page's database when the GitHub secrets
-             KV_REST_API_URL and KV_REST_API_READ_ONLY_TOKEN are set (copied from the Vercel project's Upstash database).
+  price      a held coin moving 10% or more over 6, 12 or 24 hours: one message per coin with all three changes. A window
+             alerts again only after its own length, or 10 points further the same way, or when the move turns.
   liquidity  all of a coin's pools together losing 30% or more of their dollar liquidity within an hour, seen on two
              checks in a row (a rug warning); again after 6 hours or a further 30% drop.
   summary    once a day at 08:00 Bangkok time: the portfolio and each coin over 24 hours, whale alerts, holder changes.
   whales     selling: a wallet holding at least 0.5% of supply (NET 0.1%) whose sales minus buys over 24 hours reach a
              quarter of its holding, 0.25% of supply and $10,000. Buying: a wallet whose buys minus sales over 24 hours
              reach 0.5% of supply and $10,000. Moves between wallets don't count. One alert per wallet and side per day.
+
+The page's watchlist gets every alert too, each message starting "Watchlist" (whales only for coins on Robinhood Chain
+and Arc, whose trades the hourly update archives). It is read from the page's database when the GitHub secrets
+KV_REST_API_URL and KV_REST_API_READ_ONLY_TOKEN are set (copied from the Vercel project's Upstash database).
 
 The holdings come from data/coinboard_held.json (written by the hourly build); data/coinboard_facts.json (the day's
 whale alerts and holder counts, for the summary) is written by the hourly check. Both reach the 5-minute check through
@@ -25,6 +27,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import math
 import os
 import sys
 import time
@@ -58,6 +61,12 @@ WHALE_QUIET = 24 * 3600
 SUMMARY_HOUR = 8             # the daily summary at 08:00 ...
 TZ_HOURS = 7                 # ... Bangkok time (UTC+7, no daylight saving), the time every alert shows
 EXPLORER = {"robinhood": "https://robinhoodchain.blockscout.com", "arc": "https://explorer.arc.io"}
+RPC = {"robinhood": "https://rpc.mainnet.chain.robinhood.com", "arc": "https://rpc.mainnet.arc.io"}
+WATCH = "<b>Watchlist</b> · "   # how a watchlist coin's message starts (shows in the notification)
+
+
+def tag(c: dict) -> str:
+    return WATCH if c.get("watch") else ""
 
 
 # ---------- formatting (the page's conventions: a real minus sign, K / M, prices to 4 significant digits) ----------
@@ -72,7 +81,11 @@ def usd(x: float) -> str:
 
 
 def price(x: float) -> str:
-    return f"${x:,.2f}" if x >= 100 else f"${x:.4g}" if x >= 0.0001 else f"${x:.3g}"
+    if x >= 100:
+        return f"${x:,.2f}"
+    if x >= 0.0001 or x <= 0:
+        return f"${x:.4g}"
+    return f"${x:.{2 - math.floor(math.log10(x))}f}"   # tiny prices in full: $0.00000399, not $3.99e-06
 
 
 def bkk(t: float) -> str:
@@ -147,7 +160,7 @@ def watchlist() -> list[dict]:
 def send(alerts: list[tuple[str, dict, dict | None]], state: dict) -> None:
     """Send each (message, memory, log entry); keep its memory only once Telegram has it, so a failed send is tried again."""
     for msg, mem, log in alerts:
-        print("alert:", "a watchlist coin moved" if "· watchlist" in msg.split("\n")[0] else msg.split("\n")[0])   # public log
+        print("alert:", "a watchlist alert" if msg.startswith(WATCH) else msg.split("\n")[0])   # the log is public
         if not telegram_notify.configured():
             continue
         try:
@@ -198,10 +211,10 @@ def price_alerts(coins: list[dict], pairs: dict, state: dict, now: float) -> lis
         ch, px, pc = chs[h], float(p["priceUsd"]), p.get("priceChange") or {}
         mc, val = p.get("fdv") or p.get("marketCap"), c.get("qty", 0) * px
         hold = f"\nYour holding: {usd(val)} ({'+' if ch >= 0 else '−'}{usd(abs(val * ch / (1 + ch)))} in {h} hours)" if val >= 1 else ""
-        out.append((f"{'🟢' if ch > 0 else '🔴'} <b>{esc(c['name'])} {pct(ch)} in {h} hours</b>{' · watchlist' if c.get('watch') else ''}\n\n"
-                    + " · ".join(f"{w}h {pct(x)}" for w, x in chs.items()) + "\n"
-                    f"Price <b>{price(px)}</b>" + (f" · Mcap <b>{usd(mc)}</b>" if mc else "")
-                    + (f" · 1h {pct(float(pc['h1']) / 100)}" if pc.get("h1") is not None else "") + hold
+        out.append((f"{tag(c)}{'🟢' if ch > 0 else '🔴'} <b>{esc(c['name'])} {pct(ch)} in {h} hours</b>\n\n"
+                    + " · ".join(([f"1h {pct(float(pc['h1']) / 100)}"] if pc.get("h1") is not None else [])
+                                 + [f"{w}h {pct(x)}" for w, x in chs.items()]) + "\n"
+                    f"Price <b>{price(px)}</b>" + (f" · Mcap <b>{usd(mc)}</b>" if mc else "") + hold
                     + "\n\n" + chart(c, p["pairAddress"]),
                     {f"p:{key(c)}:{w}": {"t": now, "dir": 1 if chs[w] > 0 else -1, "level": chs[w]} for w in fired}, None))
     return out
@@ -231,7 +244,7 @@ def liquidity_alerts(coins: list[dict], pairs: dict, state: dict, now: float) ->
         if last and now - last["t"] < LIQ_QUIET and total > last["level"] * (1 - LIQ_DROP):
             continue
         mins = round((now - peak[0]) / 60)
-        out.append((f"🚨 <b>{esc(c['name'])} liquidity down {1 - total / peak[1]:.0%} in {mins} minutes</b>\n\n"
+        out.append((f"{tag(c)}🚨 <b>{esc(c['name'])} liquidity down {1 - total / peak[1]:.0%} in {mins} minutes</b>\n\n"
                     f"Its pools hold {usd(total)}, from {usd(peak[1])} at {bkk(peak[0])}.\n"
                     f"Price in the same time: {pct(px / peak[2] - 1)}.\n\n"
                     "A sudden drop like this can mean liquidity is being pulled (a rug), which makes the coin hard to sell.\n\n"
@@ -241,7 +254,7 @@ def liquidity_alerts(coins: list[dict], pairs: dict, state: dict, now: float) ->
 
 
 # ---------- the daily summary ----------
-def summary(coins: list[dict], pairs: dict, state: dict, now: float) -> list:
+def summary(coins: list[dict], pairs: dict, state: dict, now: float, watch: list[dict] = ()) -> list:
     local = now + TZ_HOURS * 3600
     day = time.strftime("%Y-%m-%d", time.gmtime(local))
     if time.gmtime(local).tm_hour < SUMMARY_HOUR or state.get("sent", {}).get("summary", {}).get("day") == day:
@@ -260,22 +273,29 @@ def summary(coins: list[dict], pairs: dict, state: dict, now: float) -> list:
     if not rows:
         return []
     rows.sort(key=lambda r: -r[1])
-    w = max(len(r[0][:10]) for r in rows)
-    table = "\n".join(f"{esc(n[:10]).ljust(w)} {usd(v):>8}  {pct(ch):>7}" for n, v, ch in rows)
+    table = "\n".join(f"{esc(n)} {usd(v)} · {pct(ch)}" for n, v, ch in rows)
     facts = load(FACTS, {})
     wl = [x for x in facts.get("whales", []) if now - x["t"] < 86400]
     def whales(side: str) -> str:
         xs = [x for x in wl if x["side"] == side]
-        named = ", ".join(esc(x["coin"]) + " " + usd(x["usd"]) for x in xs[:4])
+        named = ", ".join(esc(x["coin"]) + (" (watchlist)" if x.get("watch") else "") + " " + usd(x["usd"]) for x in xs[:4])
         return f"{len(xs)} {side}{'s' if len(xs) != 1 else ''}" + (f" ({named})" if xs else "")
     hold = facts.get("holders", {})
-    holders = " · ".join(f"{esc(n)} {'+' if v[0] >= v[1] else '−'}{abs(v[0] - v[1]):,}" for n, v in hold.items() if len(v) == 2)
+    holders = " · ".join(f"{esc(n)} {'+' if v[0] >= v[1] else '−'}{abs(v[0] / v[1] - 1) * 100:.2f}%" for n, v in hold.items() if len(v) == 2 and v[1])
     move = max(rows, key=lambda r: abs(r[2] or 0))
+    wrows = []
+    for c in watch:
+        ps = pairs.get(key(c))
+        if ps:
+            h24 = (ps[0].get("priceChange") or {}).get("h24")
+            wrows.append((c["name"], float(ps[0]["priceUsd"]), float(h24) / 100 if h24 is not None else None))
+    wtable = "\n".join(f"{esc(n)} {price(px)} · {pct(ch)}" for n, px, ch in wrows)
     return [(f"☀️ <b>Daily summary</b> · {time.strftime('%a %d %b', time.gmtime(local))}\n\n"
              f"Portfolio <b>{usd(total)}</b>  {pct(total / before - 1 if before else None)} "
              f"({'+' if total >= before else '−'}{usd(abs(total - before))}) in 24h\n"
-             f"<pre>{table}</pre>\n"
+             f"{table}\n\n"
              f"Biggest move: {esc(move[0])} {pct(move[2])}\n"
+             + (f"\nWatchlist, 24h:\n{wtable}\n\n" if wrows else "") +
              f"Whale alerts, 24h: {whales('sell')} · {whales('buy')}"
              + (f"\nHolders, 24h: {holders}" if holders else ""),
              {"summary": {"t": now, "day": day}}, None)]
@@ -305,15 +325,43 @@ def tick(coins: list[dict], state: dict, now: float) -> list:
         if ps and (not h or now - h[-1][0] >= 600):
             h.append([now, float(ps[0]["priceUsd"])])
         px[key(w)] = h
-    return price_alerts(coins + watch, pairs, state, now) + liquidity_alerts(coins, pairs, state, now) + summary(coins, pairs, state, now)
+    return price_alerts(coins + watch, pairs, state, now) + liquidity_alerts(coins + watch, pairs, state, now) + summary(coins, pairs, state, now, watch)
 
 
 # ---------- whales: selling or buying a lot within a day (hourly, from the archives just refreshed) ----------
+def token_decimals(c: dict) -> int:
+    e = load(ROOT / "data/tokens/tokens.json", {}).get(c["token"].lower()) if c["chain"] == "robinhood" else None
+    if e and e.get("decimals") is not None:
+        return int(e["decimals"])
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_call", "params": [{"to": c["token"], "data": "0x313ce567"}, "latest"]})
+    req = urllib.request.Request(RPC[c["chain"]], data=body.encode(), headers={"content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return int(json.loads(r.read())["result"], 16)
+
+
+def watch_archived(held: list[dict]) -> list[dict]:
+    """The watchlist's coins on Robinhood Chain and Arc (the chains the hourly update archives) that aren't held."""
+    keys = {key(c) for c in held}
+    out = []
+    for w in watchlist():
+        if w["chain"] in RPC and key(w) not in keys:
+            try:
+                out.append({**w, "dec": token_decimals(w)})
+            except Exception:
+                pass                                # no decimals, no amounts: skipped this hour
+    return out
+
+
 def hourly(coins: list[dict], state: dict, now: float) -> list:
     import duckdb
     import dashboard_analytics as an           # the board's own whale threshold and list of pools / protocol addresses
     out, con, sent = [], duckdb.connect(), state.get("sent", {})
-    for c in coins:
+    try:
+        watch = watch_archived(coins)
+    except Exception as e:
+        print(f"warning: could not read the watchlist ({e})")
+        watch = []
+    for c in coins + watch:
         cfg = an.coin_config(c)
         d = ROOT / cfg["dir"]
         if not (d / "transfers.parquet").exists() or not (d / "ledger.parquet").exists():
@@ -355,14 +403,15 @@ def hourly(coins: list[dict], state: dict, now: float) -> list:
             wallet = f"<a href=\"{ex}/address/{addr}\">The wallet</a> · " if ex else ""
             when = bkk(last_trade)
             if side == "sell":
-                msg = (f"🐋 <b>Whale selling {esc(c['name'])}: {usd(u)} in 24 hours</b>\n\n"
+                msg = (f"{tag(c)}🐋 <b>Whale selling {esc(c['name'])}: {usd(u)} in 24 hours</b>\n\n"
                        f"A wallet that held {peak / sup:.2%} of the supply sold {min(q / peak, 1):.0%} of it "
                        f"({q / sup:.2%} of the supply), net of any buys.\nIt now holds {max(bal, 0) / sup:.2%}. Last sale {when}.\n\n")
             else:
-                msg = (f"🐳 <b>Whale buying {esc(c['name'])}: {usd(-u)} in 24 hours</b>\n\n"
+                msg = (f"{tag(c)}🐳 <b>Whale buying {esc(c['name'])}: {usd(-u)} in 24 hours</b>\n\n"
                        f"A wallet bought {-q / sup:.2%} of the supply, net of any sales.\n"
                        f"It now holds {max(bal, 0) / sup:.2%} (it held {max(start, 0) / sup:.2%} a day ago). Last buy {when}.\n\n")
-            out.append((msg + wallet + chart(c), {k: {"t": now}}, {"t": now, "coin": c["name"], "side": side, "usd": abs(u)}))
+            out.append((msg + wallet + chart(c), {k: {"t": now}},
+                        {"t": now, "coin": c["name"], "side": side, "usd": abs(u), "watch": bool(c.get("watch"))}))
     return out
 
 
