@@ -254,10 +254,10 @@ def liquidity_alerts(coins: list[dict], pairs: dict, state: dict, now: float) ->
 
 
 # ---------- the daily summary ----------
-def summary(coins: list[dict], pairs: dict, state: dict, now: float, watch: list[dict] = ()) -> list:
+def summary(coins: list[dict], pairs: dict, state: dict, now: float, watch: list[dict] = (), force: bool = False) -> list:
     local = now + TZ_HOURS * 3600
     day = time.strftime("%Y-%m-%d", time.gmtime(local))
-    if time.gmtime(local).tm_hour < SUMMARY_HOUR or state.get("sent", {}).get("summary", {}).get("day") == day:
+    if not force and (time.gmtime(local).tm_hour < SUMMARY_HOUR or state.get("sent", {}).get("summary", {}).get("day") == day):
         return []
     rows, total, before = [], 0.0, 0.0
     for c in coins:
@@ -399,20 +399,27 @@ def hourly(coins: list[dict], state: dict, now: float) -> list:
                 peak = max(peak, bal)
             if side == "sell" and (peak < whale or q < WHALE_SOLD * peak):
                 continue
-            ex = EXPLORER.get(c["chain"], "")
-            wallet = f"<a href=\"{ex}/address/{addr}\">The wallet</a> · " if ex else ""
-            when = bkk(last_trade)
-            if side == "sell":
-                msg = (f"{tag(c)}🐋 <b>Whale selling {esc(c['name'])}: {usd(u)} in 24 hours</b>\n\n"
-                       f"A wallet that held {peak / sup:.2%} of the supply sold {min(q / peak, 1):.0%} of it "
-                       f"({q / sup:.2%} of the supply), net of any buys.\nIt now holds {max(bal, 0) / sup:.2%}. Last sale {when}.\n\n")
-            else:
-                msg = (f"{tag(c)}🐳 <b>Whale buying {esc(c['name'])}: {usd(-u)} in 24 hours</b>\n\n"
-                       f"A wallet bought {-q / sup:.2%} of the supply, net of any sales.\n"
-                       f"It now holds {max(bal, 0) / sup:.2%} (it held {max(start, 0) / sup:.2%} a day ago). Last buy {when}.\n\n")
-            out.append((msg + wallet + chart(c), {k: {"t": now}},
+            out.append((whale_message(c, side, q, u, sup, peak, start, bal, last_trade, addr), {k: {"t": now}},
                         {"t": now, "coin": c["name"], "side": side, "usd": abs(u), "watch": bool(c.get("watch"))}))
     return out
+
+
+def whale_message(c: dict, side: str, q: float, u: float, sup: float, peak: float, start: float, bal: float,
+                  last_trade: float, addr: str) -> str:
+    """q and u: tokens and dollars sold (negative: bought) over 24 hours; peak / start / bal: the wallet's holding at its
+    highest, when the 24 hours began and now."""
+    ex = EXPLORER.get(c["chain"], "")
+    wallet = f"<a href=\"{ex}/address/{addr}\">The wallet</a> · " if ex else ""
+    when = bkk(last_trade)
+    if side == "sell":
+        msg = (f"{tag(c)}🐋 <b>Whale selling {esc(c['name'])}: {usd(u)} in 24 hours</b>\n\n"
+               f"A wallet that held {peak / sup:.2%} of the supply sold {min(q / peak, 1):.0%} of it "
+               f"({q / sup:.2%} of the supply), net of any buys.\nIt now holds {max(bal, 0) / sup:.2%}. Last sale {when}.\n\n")
+    else:
+        msg = (f"{tag(c)}🐳 <b>Whale buying {esc(c['name'])}: {usd(-u)} in 24 hours</b>\n\n"
+               f"A wallet bought {-q / sup:.2%} of the supply, net of any sales.\n"
+               f"It now holds {max(bal, 0) / sup:.2%} (it held {max(start, 0) / sup:.2%} a day ago). Last buy {when}.\n\n")
+    return msg + wallet + chart(c)
 
 
 def facts(state: dict, now: float) -> None:
@@ -422,11 +429,55 @@ def facts(state: dict, now: float) -> None:
     FACTS.write_text(json.dumps({"t": now, "whales": [x for x in state.get("log", []) if now - x["t"] < 86400], "holders": holders}))
 
 
+def demo(coins: list[dict], now: float) -> list[str]:
+    """One example of every alert, made by the code that makes the real ones. Prices, holdings and the summary are
+    today's; the triggers are made up (a forced price move, an earlier liquidity reading, whales' wallets and amounts)."""
+    global PRICE_MOVE
+    import coinboard_tick
+    held = {key(c) for c in coins}
+    try:
+        watch = [w for w in watchlist() if key(w) not in held]
+    except Exception:
+        watch = []
+    pairs = {}
+    for c in coins + watch:
+        try:
+            pairs[key(c)] = dex_pairs(c)
+        except Exception:
+            pass
+    coins = [c for c in coins if pairs.get(key(c))]
+    watch = [w for w in watch if pairs.get(key(w))]
+    out, keep = [], PRICE_MOVE
+    PRICE_MOVE = 0.0                              # every coin "moved": show one held coin and one watchlist coin
+    out += [m for m, _, _ in price_alerts(coins[:1] + watch[:1], pairs, {}, now)]
+    PRICE_MOVE = keep
+    for c in coins[1:2] + watch[:1]:              # liquidity as if the pools had held 1.6x today's half an hour ago
+        ps = pairs[key(c)]
+        total, px = sum(p["liquidity"].get("usd") or 0 for p in ps), float(ps[0]["priceUsd"])
+        st = {"liq": {key(c): [[now - 1800, total * 1.6, px * 1.05], [now - 300, total * 1.02, px]]}}
+        out += [m for m, _, _ in liquidity_alerts([c], pairs, st, now)]
+    c, sup, zero = coins[-1], 1e9, "0x" + "0" * 40
+    out.append(whale_message(c, "sell", 0.31 * 0.0081 * sup, 12_400, sup, 0.0081 * sup, 0.0081 * sup, 0.69 * 0.0081 * sup, now - 1800, zero))
+    out.append(whale_message(c, "buy", -0.0062 * sup, -15_800, sup, 0.0072 * sup, 0.001 * sup, 0.0072 * sup, now - 2700, zero))
+    out += [m for m, _, _ in summary(coins, pairs, {}, now, watch, force=True)]
+    out.append(coinboard_tick.stale_text(2, "Refresh, analyse, build, deploy", "https://github.com/floatology/coinboard/actions"))
+    out.append(coinboard_tick.CRON_DOWN)
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("check", choices=["tick", "hourly"])
+    ap.add_argument("check", choices=["tick", "hourly", "demo"])
     a = ap.parse_args()
     coins = load(HELD, [])
+    if a.check == "demo":                        # test messages: sent as real ones look, marked at the end, nothing kept
+        msgs = demo(coins, time.time()) if coins else []
+        for m in msgs:
+            print("test:", "a watchlist alert" if m.startswith(WATCH) else m.split("\n")[0])
+            if telegram_notify.configured():
+                telegram_notify.send(m + "\n\n<i>🧪 Test message</i>")
+        print(f"{len(msgs)} test message(s)" + ("" if coins else ": no holdings list yet"))
+        return 0
     path, now = ROOT / f"data/alerts_{a.check}.json", time.time()
     state = load(path, {})
     before = json.dumps(state, sort_keys=True)

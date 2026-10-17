@@ -14,6 +14,10 @@ on:
         description: Start the hourly update now
         type: boolean
         default: false
+      test_alerts:
+        description: Send one test message of every alert (real formatting and prices, made-up triggers)
+        type: boolean
+        default: false
   schedule:
     - cron: "3,23,43 * * * *"   # fallback if cron-job.org stops
 concurrency:
@@ -57,6 +61,14 @@ jobs:
           KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}                          # the page's watchlist (read-only)
           KV_REST_API_READ_ONLY_TOKEN: ${{ secrets.KV_REST_API_READ_ONLY_TOKEN }}
         run: python3 scripts/coinboard_alerts.py tick
+      - name: Test messages (on request)
+        if: inputs.test_alerts
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}
+          KV_REST_API_READ_ONLY_TOKEN: ${{ secrets.KV_REST_API_READ_ONLY_TOKEN }}
+        run: python3 scripts/coinboard_alerts.py demo
       - name: Keep the alerts' memory
         if: steps.alerts.outputs.changed == '1'
         uses: actions/cache/save@v6

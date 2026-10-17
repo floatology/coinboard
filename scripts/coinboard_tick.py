@@ -59,15 +59,23 @@ def crossed(age: float | None, marks: tuple, window: float) -> float | None:
     return next((m for m in marks if age is not None and m <= age < m + window), None)
 
 
+CRON_DOWN = ("⚠️ <b>cron-job.org has stopped starting the 5-minute check</b>\n\nGitHub's backup schedule is keeping the "
+             "board going, but late and irregularly. Open console.cron-job.org and check the Coin Board job: it is "
+             "switched off after repeated failures (for example if its GitHub token stopped working).")
+
+
+def stale_text(hours: float, failed_step: str | None, url: str) -> str:
+    why = ("\nThe latest update failed" + (f" at <b>{html.escape(failed_step)}</b>" if failed_step else "") + ".") if failed_step is not None else ""
+    return f"⚠️ <b>Coin Board hasn't updated for {hours:.0f} hours</b>{why}\n\n<a href=\"{html.escape(url)}\">Open the latest run</a>"
+
+
 def warnings(repo: str, now: float, event: str) -> list[str]:
     out = []
     ticks = gh("GET", f"/repos/{repo}/actions/workflows/alerts.yml/runs?event=workflow_dispatch&per_page=1")["workflow_runs"]
     tick_age = now - _ts(ticks[0]["created_at"]) if ticks else None
     cron_down = tick_age is None or tick_age > 25 * 60
     if event == "schedule" and crossed(tick_age, (30 * 60, 24 * 3600), 20 * 60):
-        out.append("⚠️ <b>cron-job.org has stopped starting the 5-minute check</b>\n\nGitHub's backup schedule is keeping the "
-                   "board going, but late and irregularly. Open console.cron-job.org and check the Coin Board job: it is "
-                   "switched off after repeated failures (for example if its GitHub token stopped working).")
+        out.append(CRON_DOWN)
     # the 5-minute ticks warn (one each per mark); GitHub's ~20-minute fallback ticks only while cron-job.org is down
     if event != "schedule" or cron_down:
         ok = gh("GET", f"/repos/{repo}/actions/workflows/coinboard.yml/runs?status=success&per_page=1")["workflow_runs"]
@@ -75,13 +83,11 @@ def warnings(repo: str, now: float, event: str) -> list[str]:
         mark = crossed(age, STALE, 5 * 60 if event != "schedule" else 20 * 60)
         if mark:
             last = gh("GET", f"/repos/{repo}/actions/workflows/coinboard.yml/runs?per_page=1")["workflow_runs"][0]
-            why = ""
+            step = None                          # None: the latest run didn't fail; "": it failed at an unknown step
             if last["status"] == "completed" and last["conclusion"] != "success":
                 jobs = gh("GET", f"/repos/{repo}/actions/runs/{last['id']}/jobs")["jobs"]
-                step = next((st["name"] for j in jobs for st in j.get("steps") or [] if st.get("conclusion") == "failure"), None)
-                why = "\nThe latest update failed" + (f" at <b>{html.escape(step)}</b>" if step else "") + "."
-            out.append(f"⚠️ <b>Coin Board hasn't updated for {mark // 3600:.0f} hours</b>{why}\n\n"
-                       f"<a href=\"{html.escape(last['html_url'])}\">Open the latest run</a>")
+                step = next((st["name"] for j in jobs for st in j.get("steps") or [] if st.get("conclusion") == "failure"), "")
+            out.append(stale_text(mark / 3600, step, last["html_url"]))
     return out
 
 
