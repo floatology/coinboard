@@ -1,7 +1,14 @@
 # One-click check that the Telegram bot works: Actions > telegram-test > Run workflow.
-# Sends a test message and the bot's profile picture to TELEGRAM_CHAT_ID. Secrets are never printed.
+# Sends a test message and the bot's profile picture to TELEGRAM_CHAT_ID, or (tick "sample") three made-up alerts.
+# Secrets are never printed.
 name: telegram-test
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      sample:
+        description: Send three made-up alerts instead
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -14,4 +21,5 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python3 scripts/telegram_notify.py --test
+          SAMPLE: ${{ inputs.sample }}
+        run: python3 scripts/telegram_notify.py $([ "$SAMPLE" = true ] && echo --sample || echo --test)

@@ -5,6 +5,7 @@ The bot token and the chat to write to come from TELEGRAM_BOT_TOKEN and TELEGRAM
 Nothing here prints them: the logs of a public repo are public.
 
     python scripts/telegram_notify.py --test     # a test message plus the bot's profile picture (dashboard/telegram_avatar.png)
+    python scripts/telegram_notify.py --sample   # three made-up alerts, to show what real ones look like
 """
 from __future__ import annotations
 
@@ -19,6 +20,33 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 AVATAR = ROOT / "dashboard/telegram_avatar.png"
+# made-up numbers (not the owner's holdings), only to show the layout of real alerts
+SAMPLES = [
+    """🟢 <b>WALLET +18.4% in 1 hour</b>  <i>sample</i>
+
+Price <b>$0.0254</b> · Mcap <b>$2.54M</b>
+24h +31.2% · 1h volume $84.1K (4.2× usual)
+Your holding: $1,240 (+$193 this hour)
+
+<a href="https://dexscreener.com/robinhood/0x0339f5459fc690ac85f1782e15782a151b4a9e1b">Open chart</a>""",
+    """🐋 <b>Whale sold FAZE: $8,960</b>  <i>sample</i>
+
+Sold 412,000 FAZE, price impact −6.1%
+Wallet <code>0x7a3f…c91e</code> now holds 1.9% of supply (was 4.6%)
+Top 10 holders: 61.2% → 58.5%
+Price <b>$0.0212</b> · Mcap <b>$2.12M</b>
+
+<a href="https://dexscreener.com/arc/0x394d38f807ee0027a182216f5e67a15ae441fa2e">Open chart</a>""",
+    """☀️ <b>Daily summary</b> · Sat 17 Oct  <i>sample</i>
+
+Portfolio <b>$3,412</b>  +4.8% (+$156) in 24h
+<pre>WALLET  $1,240  +12.3%
+FAZE      $980   −2.1%
+AF        $701   +0.4%
+NET       $491   +3.0%</pre>
+Whales: 2 buys, 1 sell over $2K
+Holders: WALLET +34 · FAZE +12 · AF −3 · NET +51""",
+]
 HINTS = {401: "the bot token is wrong (TELEGRAM_BOT_TOKEN): copy it again from @BotFather",
          400: "check TELEGRAM_CHAT_ID, and that you pressed Start in the chat with your bot",
          403: "the bot cannot write to you: open the chat with your bot in Telegram and press Start"}
@@ -68,15 +96,21 @@ def send_photo(path: Path, caption: str = "") -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--test", action="store_true", help="send a test message and the bot's profile picture")
+    ap.add_argument("--sample", action="store_true", help="send three made-up alerts")
     a = ap.parse_args()
     missing = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID") if not os.environ.get(k, "").strip()]
     if missing:
         print("missing secret(s): " + ", ".join(missing) + " (repo Settings > Secrets and variables > Actions)")
         return 1
-    if not a.test:
+    if not (a.test or a.sample):
         ap.print_help()
         return 0
     try:
+        if a.sample:
+            for m in SAMPLES:
+                send(m)
+            print(f"{len(SAMPLES)} sample alerts sent")
+            return 0
         me = _call("getMe", {})["result"]
         print(f"bot: @{me.get('username')}")
         send("✅ <b>Coin Board alerts are connected</b>\n\nThis test came from GitHub, with no Claude involved. "
