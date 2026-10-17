@@ -430,12 +430,14 @@ def level_alerts(levels: list[dict] | None, coins: list[dict], watch: list[dict]
     for k in [k for k in sent if k.startswith("v:") and k not in ids]:
         del sent[k]                                   # removed on the page
     known = {key(c): c for c in watch + coins}        # a coin both held and watched counts as held
-    for l in levels:
+    for n, l in enumerate(levels, 1):
         k, ps = f"v:{key(l)}:{l['price']}:{l['at']}", pairs.get(key(l))
-        if k in sent or not ps:
-            continue
-        px = float(ps[0]["priceUsd"])
-        if (px - l["price"]) * l["dir"] < 0:
+        px = float(ps[0]["priceUsd"]) if ps else None
+        # the public log: which way and how far, never the coin or the level
+        print(f"price alert {n}: {'held' if key(l) in known and not known[key(l)].get('watch') else 'not held'}, "
+              f"{'up' if l['dir'] > 0 else 'down'}, " + ("no price read" if px is None else f"price {(px / l['price'] - 1) * 100:+.2f}% from it")
+              + (", already sent" if k in sent else ""))
+        if k in sent or px is None or (px - l["price"]) * l["dir"] < 0:
             continue
         c = known.get(key(l), l)                      # (neither held nor watched any more: no Watchlist tag)
         mc, val = ps[0].get("fdv") or ps[0].get("marketCap"), c.get("qty", 0) * px
