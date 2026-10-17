@@ -4,8 +4,10 @@
     coinboard_alerts.py tick     # every 5 minutes (the alerts workflow): price moves, liquidity pulls, the daily summary
     coinboard_alerts.py hourly   # every hour, after the archive refresh: whales selling or buying
 
-  price      a held coin moving 10% or more over 6, 12 or 24 hours: one message per coin with all three changes. A window
-             alerts again only after its own length, or 10 points further the same way, or when the move turns.
+  price      a held coin, or one on the page's watchlist, moving 10% or more over 6, 12 or 24 hours: one message per coin
+             with all three changes. A window alerts again only after its own length, or 10 points further the same way,
+             or when the move turns. The watchlist is read from the page's database when the GitHub secrets
+             KV_REST_API_URL and KV_REST_API_READ_ONLY_TOKEN are set (copied from the Vercel project's Upstash database).
   liquidity  all of a coin's pools together losing 30% or more of their dollar liquidity within an hour, seen on two
              checks in a row (a rug warning); again after 6 hours or a further 30% drop.
   summary    once a day at 08:00 (UTC+7): the portfolio and each coin over 24 hours, whale alerts, holder changes.
@@ -65,7 +67,7 @@ def pct(x: float | None) -> str:
 
 def usd(x: float) -> str:
     a = abs(x)
-    s = f"${a / 1e6:.2f}M" if a >= 1e6 else f"${a / 1e3:.1f}K" if a >= 1e4 else f"${a:,.0f}"
+    s = f"${a / 1e9:.2f}B" if a >= 1e9 else f"${a / 1e6:.2f}M" if a >= 1e6 else f"${a / 1e3:.1f}K" if a >= 1e4 else f"${a:,.0f}"
     return ("−" if x < 0 else "") + s
 
 
@@ -109,10 +111,24 @@ def dex_pairs(c: dict) -> list[dict]:
     return ([main] if main else []) + [p for p in ps if p is not main]
 
 
+def watchlist() -> list[dict]:
+    """The coins on the page's watchlist (its Upstash database, read-only), as coin entries; [] without the secrets."""
+    url, tok = os.environ.get("KV_REST_API_URL", "").strip(), os.environ.get("KV_REST_API_READ_ONLY_TOKEN", "").strip()
+    if not url or not tok:
+        return []
+    req = urllib.request.Request(url, data=json.dumps(["GET", "coinboard:watch"]).encode(),
+                                 headers={"authorization": f"Bearer {tok}", "content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        v = json.loads(r.read()).get("result")
+    items = json.loads(v) if v else []
+    return [{"name": x.get("symbol") or "?", "chain": str(x["chain"]), "token": str(x["token"]), "pair": str(x.get("pair") or ""),
+             "watch": True} for x in items if isinstance(x, dict) and x.get("chain") and x.get("token")][:30]
+
+
 def send(alerts: list[tuple[str, dict, dict | None]], state: dict) -> None:
     """Send each (message, memory, log entry); keep its memory only once Telegram has it, so a failed send is tried again."""
     for msg, mem, log in alerts:
-        print("alert:", msg.split("\n")[0])
+        print("alert:", "a watchlist coin moved" if "· watchlist" in msg.split("\n")[0] else msg.split("\n")[0])   # public log
         if not telegram_notify.configured():
             continue
         try:
@@ -126,13 +142,14 @@ def send(alerts: list[tuple[str, dict, dict | None]], state: dict) -> None:
 
 
 # ---------- price: 10% over 6, 12 or 24 hours ----------
-def changes(c: dict, p: dict, now: float) -> dict[int, float]:
+def changes(c: dict, p: dict, now: float, hist: list) -> dict[int, float]:
     pc, out = p.get("priceChange") or {}, {}
     for h, f in ((6, "h6"), (24, "h24")):
         if pc.get(f) is not None:
             out[h] = float(pc[f]) / 100
-    # DexScreener has no 12-hour figure: the price 12 hours ago comes from the hourly history the build passes on
-    hist, ref = c.get("hist") or [], None
+    # DexScreener has no 12-hour figure: the price 12 hours ago comes from the hourly history the build passes on (held
+    # coins) or from this check's own readings (watchlist coins, once it has watched them for 12 hours)
+    ref = None
     for ts, px in hist:
         if ts <= now - 12 * 3600:
             ref = px
@@ -148,7 +165,7 @@ def price_alerts(coins: list[dict], pairs: dict, state: dict, now: float) -> lis
         if not ps:
             continue
         p = ps[0]
-        chs = changes(c, p, now)
+        chs = changes(c, p, now, c.get("hist") or state.get("px", {}).get(key(c), []))
         fired = []
         for h, ch in chs.items():
             last, d = sent.get(f"p:{key(c)}:{h}"), 1 if ch > 0 else -1
@@ -162,7 +179,7 @@ def price_alerts(coins: list[dict], pairs: dict, state: dict, now: float) -> lis
         ch, px, pc = chs[h], float(p["priceUsd"]), p.get("priceChange") or {}
         mc, val = p.get("fdv") or p.get("marketCap"), c.get("qty", 0) * px
         hold = f"\nYour holding: {usd(val)} ({'+' if ch >= 0 else '−'}{usd(abs(val * ch / (1 + ch)))} in {h} hours)" if val >= 1 else ""
-        out.append((f"{'🟢' if ch > 0 else '🔴'} <b>{esc(c['name'])} {pct(ch)} in {h} hours</b>\n\n"
+        out.append((f"{'🟢' if ch > 0 else '🔴'} <b>{esc(c['name'])} {pct(ch)} in {h} hours</b>{' · watchlist' if c.get('watch') else ''}\n\n"
                     + " · ".join(f"{w}h {pct(x)}" for w, x in chs.items()) + "\n"
                     f"Price <b>{price(px)}</b>" + (f" · Mcap <b>{usd(mc)}</b>" if mc else "")
                     + (f" · 1h {pct(float(pc['h1']) / 100)}" if pc.get("h1") is not None else "") + hold
@@ -246,13 +263,30 @@ def summary(coins: list[dict], pairs: dict, state: dict, now: float) -> list:
 
 
 def tick(coins: list[dict], state: dict, now: float) -> list:
+    try:
+        held = {key(c) for c in coins}
+        watch = [w for w in watchlist() if key(w) not in held]
+    except Exception as e:
+        print(f"warning: could not read the watchlist ({e})")
+        watch = []
+    print(f"watchlist: {len(watch)} coin(s) not also held")
     pairs = {}
-    for c in coins:
+    for c in coins + watch:
         try:
             pairs[key(c)] = dex_pairs(c)
         except Exception as e:
-            print(f"warning: no DexScreener answer for {c['name']} ({e})")
-    return price_alerts(coins, pairs, state, now) + liquidity_alerts(coins, pairs, state, now) + summary(coins, pairs, state, now)
+            print(f"warning: no DexScreener answer for {'a watchlist coin' if c.get('watch') else c['name']} ({e})")
+    # watchlist coins have no hourly history from the build: keep a reading every 10 minutes for their 12-hour change
+    px = state.setdefault("px", {})
+    for k in [k for k in px if k not in {key(w) for w in watch}]:
+        del px[k]
+    for w in watch:
+        ps = pairs.get(key(w))
+        h = [x for x in px.get(key(w), []) if now - x[0] < 25 * 3600]
+        if ps and (not h or now - h[-1][0] >= 600):
+            h.append([now, float(ps[0]["priceUsd"])])
+        px[key(w)] = h
+    return price_alerts(coins + watch, pairs, state, now) + liquidity_alerts(coins, pairs, state, now) + summary(coins, pairs, state, now)
 
 
 # ---------- whales: selling or buying a lot within a day (hourly, from the archives just refreshed) ----------

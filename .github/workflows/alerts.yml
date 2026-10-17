@@ -2,7 +2,8 @@ name: alerts
 # Coin Board's 5-minute tick. cron-job.org starts it through GitHub's API every 5 minutes (on time, unlike GitHub's own
 # schedule, which runs late or not at all when busy; that stays below as a fallback). It starts the hourly update
 # (coinboard.yml) when due, warns on Telegram if the board stops updating, and runs the 5-minute alerts
-# (scripts/coinboard_alerts.py tick: price moves over 6/12/24 hours, liquidity pulls, the 08:00 daily summary). The
+# (scripts/coinboard_alerts.py tick: price moves over 6/12/24 hours for held and watchlist coins, liquidity pulls, the
+# 08:00 daily summary). The
 # holdings list and the summary's facts come from the hourly update through a small cache; the alerts' memory (what
 # was sent, the last hour of liquidity readings) is kept in another. Run it by hand with "force update" to start
 # the hourly update now.
@@ -53,6 +54,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          KV_REST_API_URL: ${{ secrets.KV_REST_API_URL }}                          # the page's watchlist (read-only)
+          KV_REST_API_READ_ONLY_TOKEN: ${{ secrets.KV_REST_API_READ_ONLY_TOKEN }}
         run: python3 scripts/coinboard_alerts.py tick
       - name: Keep the alerts' memory
         if: steps.alerts.outputs.changed == '1'
