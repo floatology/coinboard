@@ -36,6 +36,12 @@ with httpx.Client(base_url="https://api.vercel.com", headers={"Authorization": f
         sys.exit(f"Vercel project '{a.project}' not found with this token (check VERCEL_PROJECT and that the token's scope is the team that owns it)")
     if (proj.get("ssoProtection") or {}).get("deploymentType") != "all":
         sys.exit("Protection is not 'all'; refusing to deploy")
+    print("project Node.js:", proj.get("nodeVersion"), "(the site's package.json asks for", end=" ")
+    try:
+        import json
+        print(json.loads((a.dir / "package.json").read_text())["engines"]["node"] + ")")
+    except Exception:
+        print("nothing)")
     blobs = {f.relative_to(a.dir).as_posix(): f.read_bytes() for f in sorted(a.dir.rglob("*")) if f.is_file()}
     files = [{"file": n, "sha": hashlib.sha1(d).hexdigest(), "size": len(d)} for n, d in blobs.items()]
     by = {f["sha"]: blobs[f["file"]] for f in files}
@@ -55,3 +61,5 @@ with httpx.Client(base_url="https://api.vercel.com", headers={"Authorization": f
             break
         time.sleep(3)
     print(st.get("readyState"), "https://" + st["url"], [x for x in st.get("alias") or []])
+    if st.get("readyState") != "READY":   # a failed or stuck deployment must fail the run (the last good one stays live)
+        sys.exit(f"deployment not ready: {st.get('readyState')} {st.get('errorMessage') or ''}".strip())

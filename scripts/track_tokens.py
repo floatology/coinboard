@@ -4,7 +4,7 @@
 Two commands:
 
     track_tokens.py add ORBIO ASKR ...      # resolve and register
-    track_tokens.py build [--only ORBIO]    # scan, attribute, ledger
+    track_tokens.py build [--only ORBIO]    # scan, attribute, ledger (--only takes symbols or token addresses)
 
 **Every pool, not the main one.** ORBIO trades in 22 pools, one of them quoted
 in a stock token, and ASKR across two DEXes. A single-pool archive would miss
@@ -92,8 +92,8 @@ def note(msg: str) -> None:
     if not STATUS.exists():
         STATUS.write_text("# Archive build status\n\n")
     with STATUS.open("a") as f:
-        f.write(f"{dt.datetime.utcnow():%Y-%m-%dT%H:%M:%SZ}  {msg}\n")
-    print(f"[{dt.datetime.utcnow():%H:%M:%S}] {msg}", flush=True)
+        f.write(f"{dt.datetime.now(dt.timezone.utc):%Y-%m-%dT%H:%M:%SZ}  {msg}\n")
+    print(f"[{dt.datetime.now(dt.timezone.utc):%H:%M:%S}] {msg}", flush=True)
 
 
 def load_reg() -> dict:
@@ -400,7 +400,7 @@ def build_token(token: str, entry: dict, eth_usd: float) -> bool:
                   "decimals": p["quote_decimals"], "symbol": p["quote_symbol"]}
               for k, p in entry["pools"].items()}
     (tdir / "quotes.json").write_text(json.dumps(
-        {"priced_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        {"priced_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
          "eth_usd": eth_usd, "pools": quotes}, indent=1))
     cmd = [PY, str(ROOT / "scripts/build_ledger.py"), "--dir", str(tdir),
            "--eth-usd", str(eth_usd), "--quotes", str(tdir / "quotes.json"),
@@ -427,8 +427,8 @@ def eth_price() -> float:
 
 def cmd_build(args) -> int:
     reg = load_reg()
-    todo = [(t, e) for t, e in reg.items()
-            if not args.only or e["symbol"].upper() in {x.upper() for x in args.only}]
+    only = {x.upper() for x in args.only or []}         # symbols or token addresses
+    todo = [(t, e) for t, e in reg.items() if not only or e["symbol"].upper() in only or t.upper() in only]
     subprocess.run([PY, str(ROOT / "scripts/block_times.py"), "--verify", "5"], cwd=ROOT,
                    stdout=subprocess.DEVNULL)
     eth = eth_price()
@@ -446,7 +446,7 @@ def cmd_reprice(args) -> int:
     reg = load_reg()
     eth = eth_price()
     for token, entry in reg.items():
-        if args.only and entry["symbol"].upper() not in {x.upper() for x in args.only}:
+        if args.only and entry["symbol"].upper() not in {x.upper() for x in args.only} and token.upper() not in {x.upper() for x in args.only}:
             continue
         tdir = ROOT / "data/tokens" / token
         if args.skip and token in args.skip:
@@ -456,7 +456,7 @@ def cmd_reprice(args) -> int:
         quotes = {k: {"quote_usd": quote_usd(p["quote"], eth), "decimals": p["quote_decimals"],
                       "symbol": p["quote_symbol"]} for k, p in entry["pools"].items()}
         (tdir / "quotes.json").write_text(json.dumps(
-            {"priced_at": dt.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+            {"priced_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
              "eth_usd": eth, "pools": quotes}, indent=1))
         market = sorted({V4_POOL_MANAGER if p["kind"] == "v4" else k
                          for k, p in entry["pools"].items()})

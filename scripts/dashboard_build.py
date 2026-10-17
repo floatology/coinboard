@@ -15,6 +15,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -24,6 +25,16 @@ import duckdb
 import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
+PUBLIC_LOG = os.environ.get("GITHUB_ACTIONS") == "true"     # the coinboard repo is public, and so are its run logs
+
+
+def say(msg: str) -> None:
+    """Print a line that may describe the owner's holdings. In GitHub's logs (public) amounts and addresses are hidden;
+    anywhere, characters that could pass for log commands or line breaks (token symbols are set by anyone) become '?'."""
+    if PUBLIC_LOG:
+        msg = re.sub(r"0x[0-9a-fA-F]{6,}", "(address)", msg)
+        msg = re.sub(r"\d[\d,]*(?:\.\d+)?(?:e[-+]?\d+)?", "#", msg)
+    print(re.sub(r"[^\x20-\x7e…→×—]", "?", msg).replace("::", ":"), flush=True)
 CHAIN = {"robinhood": "robinhood", "arc": "arc"}
 
 
@@ -32,14 +43,14 @@ def best_pair(chain: str, token: str) -> str:
     costs one hour's chart for that coin instead of the whole build."""
     for attempt in range(4):
         try:
-            r = httpx.get(f"https://api.dexscreener.com/latest/dex/tokens/{token}", timeout=30).json()["pairs"] or []
-            ps = [p for p in r if p["chainId"] == chain and p["baseToken"]["address"].lower() == token.lower() and p.get("liquidity")]
+            r = httpx.get(f"https://api.dexscreener.com/token-pairs/v1/{chain}/{token}", timeout=30).json()
+            ps = [p for p in (r if isinstance(r, list) else []) if p["chainId"] == chain and p["baseToken"]["address"].lower() == token.lower() and p.get("liquidity")]
             if ps:
                 return max(ps, key=lambda p: p["liquidity"]["usd"])["pairAddress"]
         except Exception:
             pass
         time.sleep(3 * (attempt + 1))
-    print(f"warning: no DexScreener pair for {token} this hour")
+    say(f"warning: no DexScreener pair for {token} this hour")
     return ""
 
 
@@ -142,7 +153,7 @@ def _replay(cfg_file: Path, env: dict) -> dict | None:
                            timeout=900, env=env, check=True)
         return json.loads(r.stdout)
     except Exception as e:
-        print(f"warning: wallet replay failed ({(getattr(e, 'stderr', '') or str(e)).strip()[:200]})")
+        say(f"warning: wallet replay failed ({(getattr(e, 'stderr', '') or str(e)).strip()[:200]})")
         return None
 
 
@@ -165,7 +176,7 @@ def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, c
                for k in [(c["chain"], c["token"].lower())] for q in [chain_qty.get(k)]
                if q is not None and abs(rq.get(k, 0) - q) > max(0.01, 0.005 * q)]
         if bad:
-            print("warning: replay disagrees with on-chain balances (" + "; ".join(bad) + ")")
+            say("warning: replay disagrees with on-chain balances (" + "; ".join(bad) + ")")
         held = {(c["chain"], c["token"].lower()) for c in coins}
         fixed, dust = [], []
         for h in res["holdings"] + res["closed"]:
@@ -175,9 +186,9 @@ def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, c
                 money = (h["chain"], h["token"].lower()) in held or was.get("paid", was.get("cost", 0) > 0) or h.get("soldQty", 0) > 0
                 (fixed if money else dust).append(msg)
         if dust:                                     # tokens nobody paid for here (airdrops, transfers in): costed at market
-            print("replay: corrected free tokens (" + "; ".join(dust) + ")")
+            say("replay: corrected free tokens (" + "; ".join(dust) + ")")
         if fixed:                                    # a coin with money in it: do not trust the replay's costs
-            print("warning: replay needed balance corrections (" + "; ".join(fixed) + ")")
+            say("warning: replay needed balance corrections (" + "; ".join(fixed) + ")")
         return not bad and not fixed
 
     res = None
@@ -212,7 +223,7 @@ def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, c
     except Exception as e:
         print(f"warning: could not save the replay point ({e})")
     for n in res.get("notes", []):
-        print("replay note:", n)
+        say("replay note: " + n)
     by = {(c["chain"], c["token"].lower()): c for c in coins}
     shown, gone = [], []
     for h in res["holdings"]:
@@ -229,7 +240,7 @@ def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, c
             led = ROOT / f"data/{'arc' if h['chain'] == 'arc' else 'tokens'}/{h['token'].lower()}/ledger.parquet"
             c = {"name": h["symbol"], "symbol": h["symbol"], "chain": h["chain"], "token": h["token"], "pair": pair,
                  "hist": series(led, now), "bought": time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(now))}
-            print(f"replay: new holding {h['symbol']} {h['qty']:,.4f}")
+            say(f"replay: new holding {h['symbol']} {h['qty']:,.4f}")
         c = {**c, "qty": h["qty"], "cost": round(h["cost"], 2), "soldQty": h["soldQty"], "soldProceeds": h["soldProceeds"],
              "realised": round(h["realised"], 2), "dec": h["dec"]}
         shown.append(c)
@@ -243,7 +254,7 @@ def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, c
                 "soldQty": h["soldQty"], "soldProceeds": h["soldProceeds"], "realised": round(h["realised"], 2), "dec": h["dec"]}
                for h in res["closed"] if h.get("soldQty", 0) > 0]
     if gone:
-        print("replay: no longer held:", ", ".join(gone))
+        say("replay: no longer held: " + ", ".join(gone))
     print(f"replay: baseline moved to " + ", ".join(f"{k} block {v:,}" for k, v in res["heads"].items()))
     return shown, closed2
 
@@ -271,11 +282,11 @@ def main() -> int:
         try:
             oc = onchain(CHAINS[p["chain"]]["rpc"], p["token"], wallets[p["chain"]], dec)
         except Exception:
-            print(f"{p['name']:7} on-chain check skipped (RPC busy)")
+            say(f"{p['name']:7} on-chain check skipped (RPC busy)")
             continue
         chain_qty[(p["chain"], p["token"].lower())] = oc
         flag = "" if abs(oc - p["qty"]) <= max(0.01, p["qty"] * 0.002) else "   <-- MISMATCH, fix positions.json before deploying"
-        print(f"{p['name']:7} positions {p['qty']:>16,.4f}  on-chain {oc:>16,.4f}{flag}")
+        say(f"{p['name']:7} positions {p['qty']:>16,.4f}  on-chain {oc:>16,.4f}{flag}")
     mkt = {}
     for cid in ("bitcoin", "ethereum"):
         for attempt in range(4):
@@ -312,6 +323,8 @@ def main() -> int:
     (out / "vercel.json").write_text(json.dumps({
         "functions": {"api/scan.js": {"maxDuration": 60}, "api/refresh.js": {"maxDuration": 15}, "api/watch.js": {"maxDuration": 15}},
         "headers": [{"source": "/(.*)", "headers": [{"key": "X-Robots-Tag", "value": "noindex, nofollow"}, {"key": "Cache-Control", "value": "no-store"}]}]}))
+    # the functions' Node.js line, stated here rather than left to the project setting (which Vercel retires with the version)
+    (out / "package.json").write_text(json.dumps({"private": True, "engines": {"node": "24.x"}}))
     an = out / "analytics.json"
     an_data = json.loads(an.read_text()) if an.exists() else {"coins": {}}
     logo = "data:image/png;base64," + base64.b64encode((ROOT / "dashboard/logo.png").read_bytes()).decode()

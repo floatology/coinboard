@@ -111,8 +111,8 @@ def signed(word: str, bits: int = 256) -> int:
 
 
 def dexscreener_pools(token: str) -> list[dict]:
-    r = httpx.get(f"https://api.dexscreener.com/latest/dex/tokens/{token}", timeout=30).json()
-    return [p for p in r.get("pairs") or []
+    r = httpx.get(f"https://api.dexscreener.com/token-pairs/v1/arc/{token}", timeout=30).json()
+    return [p for p in (r if isinstance(r, list) else [])
             if p.get("chainId") == "arc" and p["baseToken"]["address"].lower() == token.lower()
             or p.get("chainId") == "arc" and p["quoteToken"]["address"].lower() == token.lower()]
 

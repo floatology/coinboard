@@ -1,7 +1,7 @@
 name: alerts
 # Coin Board's 5-minute tick. cron-job.org starts it through GitHub's API every 5 minutes (on time, unlike GitHub's own
 # schedule, which runs late or not at all when busy; that stays below as a fallback). It starts the hourly update
-# (coinboard.yml) when due; the Telegram alert checks will run here too. Run it by hand with "force update" to start
+# (coinboard.yml) when due and warns on Telegram if the board stops updating; the price alerts will run here too. Run it by hand with "force update" to start
 # the hourly update now.
 on:
   workflow_dispatch:
@@ -24,8 +24,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - name: Start the hourly update if it is due
+      - name: Start the hourly update if it is due; warn on Telegram if the board has stopped updating
         env:
           GITHUB_TOKEN: ${{ github.token }}
           FORCE_UPDATE: ${{ inputs.force_update }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python3 scripts/coinboard_tick.py

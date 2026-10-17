@@ -1,0 +1,8 @@
+# Coin Board's Python packages, capped at the major versions it is tested with: fixes arrive, breaking releases don't.
+# Raise a cap after checking the new major (for example: pip install "pyarrow<28" and run the hourly job once).
+httpx>=0.28,<1
+pydantic>=2.10,<3
+duckdb>=1.4,<2
+pyarrow>=21,<27
+python-dotenv>=1.0,<2
+numpy>=2.0,<3

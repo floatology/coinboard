@@ -171,8 +171,8 @@ addEventListener("scroll",()=>{ if($("#tip").style.display!=="none"&&Math.abs(sc
 
 /* ---------- data sources ---------- */
 async function dexToken(chain, token){
-  const r=await fetch(`https://api.dexscreener.com/latest/dex/tokens/${token}`,{signal:AbortSignal.timeout(15000)}); const j=await r.json();
-  const ps=(j.pairs||[]).filter(p=>p.chainId===chain && p.baseToken.address.toLowerCase()===token.toLowerCase() && p.liquidity).sort((a,b)=>b.liquidity.usd-a.liquidity.usd);
+  const r=await fetch(`https://api.dexscreener.com/token-pairs/v1/${chain}/${token}`,{signal:AbortSignal.timeout(15000)}); const j=await r.json();
+  const ps=(Array.isArray(j)?j:[]).filter(p=>p.chainId===chain && p.baseToken.address.toLowerCase()===token.toLowerCase() && p.liquidity).sort((a,b)=>b.liquidity.usd-a.liquidity.usd);
   return ps[0]||null;
 }
 let geckoQ = Promise.resolve();

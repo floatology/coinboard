@@ -6,9 +6,10 @@ name: coinboard
 #   VERCEL_TOKEN    Vercel token that can deploy the coinboard project
 #   VERCEL_PROJECT  the Vercel project name
 #   SEED_REPO, SEED_TOKEN  optional: a fallback source of starting archives if both the cache and the backup release are lost
-# The archives live in the Actions cache between runs; a copy is uploaded daily to the "archive-backup" release (public
-# chain data only; the replay state with costs is left out). A small commit every ~40 days keeps the alerts fallback
-# schedule enabled (GitHub switches off scheduled workflows in public repositories after 60 days without activity).
+# The archives live in the Actions cache between runs (older entries are deleted, newest 3 kept); a copy goes to the
+# "archive-backup" release once a day (public chain data only; the replay state with costs is left out). A small commit
+# every ~40 days keeps the alerts fallback schedule enabled (GitHub switches off scheduled workflows in public
+# repositories after 60 days without activity). Package versions: requirements.txt; Node.js for the wallet replay: 24.
 on:
   workflow_dispatch:
 concurrency:
@@ -16,6 +17,7 @@ concurrency:
   cancel-in-progress: true    # a newer run (the tick or the page button) replaces an older one
 permissions:
   contents: write      # the keep-alive commit and the archive backup release
+  actions: write       # deleting old archive caches
 jobs:
   refresh:
     runs-on: ubuntu-latest
@@ -25,10 +27,15 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
       - name: Install
         run: |
           python -m venv .venv
-          .venv/bin/pip install -q httpx pydantic duckdb pyarrow python-dotenv numpy
+          .venv/bin/pip install -q -r requirements.txt
       - name: Restore archives
         id: cache
         uses: actions/cache/restore@v6
@@ -62,25 +69,31 @@ jobs:
           printf '%s' "$POSITIONS_JSON" > /tmp/positions.json
           .venv/bin/python scripts/coinboard_ci.py --positions /tmp/positions.json
       - name: Save archives
-        if: success() && steps.main.outputs.skipped != '1'
         uses: actions/cache/save@v6
         with:
           path: data
           key: coinboard-data-${{ github.run_id }}
-      - name: Back up archives (daily, or if there is no backup yet)
-        if: success() && steps.main.outputs.skipped != '1'
+      - name: Delete older archive caches (keeps the newest 3)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$(date -u +%H)" = "03" ] || ! gh release view archive-backup >/dev/null 2>&1; then
+          gh cache list --key coinboard-data- --sort created_at --order desc --limit 100 --json id --jq '.[3:][].id' |
+            while read -r id; do gh cache delete "$id"; done
+      - name: Back up archives (when the backup is over 20 hours old, or missing)
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          made=$(gh release view archive-backup --json assets --jq '.assets[] | select(.name == "data.tar.zst") | .updatedAt' 2>/dev/null || true)
+          if [ -z "$made" ] || [ $(( $(date +%s) - $(date -d "$made" +%s) )) -gt $((20*3600)) ]; then
             tar --exclude=data/coinboard_replay_state.json --exclude=data/coinboard_value_history.json -c data | zstd -T0 -10 -q -o /tmp/data.tar.zst
             gh release view archive-backup >/dev/null 2>&1 || gh release create archive-backup --title "Archive backup" \
               --notes "Daily copy of the trade archives (public chain data) so the hourly job can recover if its cache is lost."
             gh release upload archive-backup /tmp/data.tar.zst --clobber
             echo "backed up $(du -h /tmp/data.tar.zst | cut -f1)"
           fi
-      - name: Keep the hourly schedule alive
+      - name: Keep the fallback schedule alive
         if: success()
         continue-on-error: true
         run: |

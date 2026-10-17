@@ -59,8 +59,8 @@ const getJSON = async u => { const r = await fetch(u, { signal: AbortSignal.time
 async function priceAt(key, url, token, block) {
   let pair, now = null;
   try {
-    const j = await getJSON(`https://api.dexscreener.com/latest/dex/tokens/${token}`);
-    const p = (j.pairs || []).filter(p => p.chainId === key && lc(p.baseToken && p.baseToken.address) === token && p.liquidity)
+    const j = await getJSON(`https://api.dexscreener.com/token-pairs/v1/${key}/${token}`);
+    const p = (Array.isArray(j) ? j : []).filter(p => p.chainId === key && lc(p.baseToken && p.baseToken.address) === token && p.liquidity)
       .sort((a, b) => b.liquidity.usd - a.liquidity.usd)[0];
     if (p) { pair = p.pairAddress; now = parseFloat(p.priceUsd) || null; }
   } catch {}
@@ -98,7 +98,8 @@ async function scanChain(key, ch, notes) {
     });
     // ETH price for WETH-valued flows
     let ethPx = 0;
-    if (ch.weth) { try { const r = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${ch.weth}`); const j = await r.json(); const p = (j.pairs || []).filter(p => p.liquidity).sort((a, b) => b.liquidity.usd - a.liquidity.usd)[0]; ethPx = parseFloat(p.priceUsd) || 0; } catch { ethPx = ch.ethUsd || 0; } }
+    // (only pairs with WETH as the base token: in WALLET/WETH the price is WALLET's)
+    if (ch.weth) { try { const j = await getJSON(`https://api.dexscreener.com/token-pairs/v1/${key}/${ch.weth}`); const p = (Array.isArray(j) ? j : []).filter(p => lc(p.baseToken && p.baseToken.address) === lc(ch.weth) && p.liquidity).sort((a, b) => b.liquidity.usd - a.liquidity.usd)[0]; ethPx = parseFloat(p.priceUsd) || 0; } catch { ethPx = ch.ethUsd || 0; } }
     const decs = {};
     const getDec = async t => { if (decs[t] != null) return decs[t]; const d = hold[t] && hold[t].dec ? hold[t].dec : await dec(url, t); if (d == null) throw new Error("could not read decimals of " + t); return (decs[t] = d); };
     receipts.sort((a, b) => hex(a.blockNumber) - hex(b.blockNumber) || hex(a.transactionIndex) - hex(b.transactionIndex));

@@ -9,23 +9,20 @@ secret and is never committed.
 """
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PY = sys.executable
-
-
-def run(cmd: list[str], **kw) -> subprocess.Popen:
-    return subprocess.Popen(cmd, cwd=ROOT, **kw)
-
+sys.path.insert(0, str(ROOT / "scripts"))
+from dashboard_build import say   # noqa: E402  (log lines that may describe holdings: hidden amounts in GitHub's public logs)
 
 COINS_FILE = ROOT / "data/coinboard_coins.json"
-LAST_RUN = ROOT / "data/coinboard_last_run"
+TOKEN = re.compile(r"0x[0-9a-f]{40}")
 SHOWN = ROOT / "data/coinboard_shown.json"    # the holdings the last build showed (listed, worth $0.50+)
 NEW_COIN_BUDGET = 25 * 60      # seconds the archive refresh may take in one run
 
@@ -45,7 +42,7 @@ def held_coins(cfg: dict) -> list[dict]:
         if (c["chain"], c["token"].lower()) not in seen and c["chain"] in ("arc", "robinhood"):
             out.append({"name": c["name"], "chain": c["chain"], "token": c["token"], "dec": c.get("dec", 18)})
             seen.add((c["chain"], c["token"].lower()))
-            print(f"also tracking {c['name']} ({c['chain']}), held since the positions file", flush=True)
+            say(f"also tracking {c['name']} ({c['chain']}), held since the positions file")
     return out
 
 
@@ -68,7 +65,7 @@ def check_site(site: Path) -> list[str]:
             problems.append("no holdings on the page")
         for c in coins:
             if not (c.get("qty", 0) > 0 and c.get("cost", -1) >= 0):
-                problems.append(f"{c.get('name')} has qty {c.get('qty')} cost {c.get('cost')}")
+                problems.append(f"{c.get('name')} has a missing or negative quantity or cost")
         if "__DATA__" in html or "__LOGO__" in html:
             problems.append("template placeholders left in the page")
     except Exception as e:
@@ -93,46 +90,36 @@ def main() -> int:
     a = ap.parse_args()
     cfg = json.loads(Path(a.positions).read_text())
     t0 = time.time()
-    # The schedule fires several times an hour (GitHub drops many scheduled runs); one update an hour is enough, and it
-    # keeps deploys well inside Vercel's daily limit. Runs from the page's button always go ahead.
-    if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and LAST_RUN.exists():
-        try:
-            age = time.time() - float(LAST_RUN.read_text())
-        except ValueError:
-            age = 1e9
-        if age < 40 * 60:
-            print(f"last update {age / 60:.0f} min ago; skipping this scheduled run")
-            if os.environ.get("GITHUB_OUTPUT"):
-                with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-                    f.write("skipped=1\n")
-            return 0
-    coins = held_coins(cfg)
-    procs = []
-    for c in coins:
+    coins = [c for c in held_coins(cfg) if TOKEN.fullmatch(c["token"].lower())]
+
+    def refresh(c: dict) -> tuple[str, str]:
+        """One coin's archive refresh: its commands in order, as argument lists (never through a shell: token symbols
+        are chosen by whoever made the token). Coins are picked by address, never by symbol."""
+        tok = c["token"].lower()
         if c["chain"] == "arc":
-            cmd = f"{PY} scripts/arc_archive.py {c['token']} && {PY} scripts/arc_ledger.py {c['token']}"
-        else:
-            sym = registered_symbol(c["token"])
-            if sym is None:                         # bought since the positions file: register it first (by address)
-                cmd = f"{PY} scripts/track_tokens.py add {c['token']} && {PY} scripts/track_tokens.py build --only $({PY} -c " \
-                      f"\"import json;print(json.load(open('data/tokens/tokens.json'))['{c['token'].lower()}']['symbol'])\")"
-            else:
-                cmd = f"{PY} scripts/track_tokens.py build --only {sym}"
-        procs.append((c["name"], subprocess.Popen(cmd, shell=True, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)))
+            steps = [[PY, "scripts/arc_archive.py", tok], [PY, "scripts/arc_ledger.py", tok]]
+        else:                                       # bought since the positions file: register it first
+            steps = ([[PY, "scripts/track_tokens.py", "add", tok]] if registered_symbol(tok) is None else []) + \
+                    [[PY, "scripts/track_tokens.py", "build", "--only", tok]]
+        for cmd in steps:
+            try:   # a new coin's first archive can take longer than an hour: it resumes on the next run
+                r = subprocess.run(cmd, cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                                   timeout=max(60, NEW_COIN_BUDGET - (time.time() - t0)))
+            except subprocess.TimeoutExpired:
+                return "not finished this run (will resume next run)", ""
+            if r.returncode:
+                return "FAILED", r.stderr
+        return "ok", ""
+
     bad = []
-    for name, pr in procs:
-        try:   # a new coin's first archive can take longer than an hour: it resumes on the next run
-            err = pr.communicate(timeout=max(60, NEW_COIN_BUDGET - (time.time() - t0)))[1]
-        except subprocess.TimeoutExpired:
-            pr.kill(); pr.communicate()
-            print(f"refresh {name}: not finished this run (will resume next run)", flush=True)
-            continue
-        print(f"refresh {name}: {'ok' if pr.returncode == 0 else 'FAILED'}", flush=True)
-        if pr.returncode:
-            bad.append(name)
-            print((err or "")[-1500:], flush=True)
+    with ThreadPoolExecutor(max_workers=max(1, len(coins))) as ex:
+        for c, (status, err) in zip(coins, ex.map(refresh, coins)):
+            say(f"refresh {c['name']}: {status}")
+            if status == "FAILED":
+                bad.append(c["name"])
+                print(re.sub(r"[^\x20-\x7e\n]", "?", err[-1500:]).replace("::", ":"), flush=True)
     if bad:   # prices, holdings and charts are still current; only that coin's analytics stay at the last good refresh
-        print("warning: archive refresh failed for " + ", ".join(bad) + "; its analytics stay at the last good refresh", flush=True)
+        say("warning: archive refresh failed for " + ", ".join(bad) + "; its analytics stay at the last good refresh")
     COINS_FILE.write_text(json.dumps([{k: c[k] for k in ("name", "chain", "token", "dec")} for c in coins]))
     print(f"archives refreshed in {time.time() - t0:.0f}s", flush=True)
     for cmd in ([PY, "scripts/dashboard_analytics.py", "--coins", str(COINS_FILE)], [PY, "scripts/dashboard_build.py", "--positions", a.positions]):
@@ -143,7 +130,6 @@ def main() -> int:
         return 1
     if not a.no_deploy:
         subprocess.run([PY, "scripts/dashboard_deploy.py"], cwd=ROOT, check=True)
-    LAST_RUN.write_text(str(time.time()))
     print(f"done in {time.time() - t0:.0f}s")
     return 0
 
