@@ -54,6 +54,7 @@ jobs:
             echo "::error::no cached archives, no backup release and no seed: nothing to start from"; exit 1
           fi
       - name: Refresh, analyse, build, deploy
+        id: main
         env:
           POSITIONS_JSON: ${{ secrets.POSITIONS_JSON }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
@@ -62,13 +63,13 @@ jobs:
           printf '%s' "$POSITIONS_JSON" > /tmp/positions.json
           .venv/bin/python scripts/coinboard_ci.py --positions /tmp/positions.json
       - name: Save archives
-        if: success()
+        if: success() && steps.main.outputs.skipped != '1'
         uses: actions/cache/save@v4
         with:
           path: data
           key: coinboard-data-${{ github.run_id }}
       - name: Back up archives (daily, or if there is no backup yet)
-        if: success()
+        if: success() && steps.main.outputs.skipped != '1'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}

@@ -9,6 +9,7 @@ secret and is never committed.
 """
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -24,6 +25,7 @@ def run(cmd: list[str], **kw) -> subprocess.Popen:
 
 
 COINS_FILE = ROOT / "data/coinboard_coins.json"
+LAST_RUN = ROOT / "data/coinboard_last_run"
 SHOWN = ROOT / "data/coinboard_shown.json"    # the holdings the last build showed (listed, worth $0.50+)
 NEW_COIN_BUDGET = 25 * 60      # seconds the archive refresh may take in one run
 
@@ -91,6 +93,19 @@ def main() -> int:
     a = ap.parse_args()
     cfg = json.loads(Path(a.positions).read_text())
     t0 = time.time()
+    # The schedule fires several times an hour (GitHub drops many scheduled runs); one update an hour is enough, and it
+    # keeps deploys well inside Vercel's daily limit. Runs from the page's button always go ahead.
+    if os.environ.get("GITHUB_EVENT_NAME") == "schedule" and LAST_RUN.exists():
+        try:
+            age = time.time() - float(LAST_RUN.read_text())
+        except ValueError:
+            age = 1e9
+        if age < 40 * 60:
+            print(f"last update {age / 60:.0f} min ago; skipping this scheduled run")
+            if os.environ.get("GITHUB_OUTPUT"):
+                with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+                    f.write("skipped=1\n")
+            return 0
     coins = held_coins(cfg)
     procs = []
     for c in coins:
@@ -128,6 +143,7 @@ def main() -> int:
         return 1
     if not a.no_deploy:
         subprocess.run([PY, "scripts/dashboard_deploy.py"], cwd=ROOT, check=True)
+    LAST_RUN.write_text(str(time.time()))
     print(f"done in {time.time() - t0:.0f}s")
     return 0
 
