@@ -295,11 +295,24 @@ async function buildAnalytics(){
 
 /* ---------- watchlist ---------- */
 let watch = store.get("watch",[]), watchSync=false;
-// the watchlist lives on the server when a database is connected (shared by all your devices), else in this browser
-const saveWatch=()=>{ store.set("watch",watch); if(watchSync) fetch("api/watch",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({watch:watch.map(({chain,token,symbol,pair})=>({chain,token,symbol,pair}))}),signal:AbortSignal.timeout(10000)}).catch(()=>{}); };
-async function loadWatch(){ try{ const r=await fetch("api/watch",{signal:AbortSignal.timeout(10000)}); if(!r.ok) return; const j=await r.json(); watchSync=true;
-    const server=j.watch||[], k=c=>c.chain+":"+c.token.toLowerCase(), have=new Set(server.map(k)), extra=watch.filter(c=>!have.has(k(c)));
-    watch=[...server,...extra]; store.set("watch",watch); if(extra.length||j.watch===null) saveWatch(); buildWatch(); renderWatch(); refresh(); }catch(e){} }
+// the watchlist lives on the server when a database is connected (shared by all your devices), else in this browser.
+// A browser's first sync merges in what it had; after that the server's list wins (so a coin removed on one device stays
+// removed), except for a change this browser could not upload ("wdirty"), which it sends on the next load.
+let wseq=0;
+const saveWatch=()=>{ store.set("watch",watch); if(!watchSync){ if(store.get("wsynced",0)) store.set("wdirty",1); return; }
+  store.set("wdirty",1); const n=++wseq;
+  fetch("api/watch",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({watch:watch.map(({chain,token,symbol,pair})=>({chain,token,symbol,pair}))}),signal:AbortSignal.timeout(10000)})
+    .then(r=>{ if(r.ok&&n===wseq) store.set("wdirty",0); }).catch(()=>{}); };
+async function loadWatch(){ try{ const r=await fetch("api/watch",{signal:AbortSignal.timeout(10000)}); if(!r.ok) return; const j=await r.json();
+    const server=j.watch||[], k=c=>c.chain+":"+c.token.toLowerCase(), first=!store.get("wsynced",0);
+    let next=server, push=j.watch===null;
+    if(first){ const have=new Set(server.map(k)), extra=watch.filter(c=>!have.has(k(c))); next=[...server,...extra]; push=push||extra.length>0; }
+    else if(store.get("wdirty",0)){ next=watch; push=true; }
+    watchSync=true; store.set("wsynced",1);
+    const same=next.map(k).join()===watch.map(k).join(); watch=next;
+    if(push) saveWatch(); else store.set("watch",watch);
+    if(!same){ buildWatch(); renderWatch(); refresh(); } }catch(e){} }
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) loadWatch(); });   // pick up changes made on another device
 function buildWatch(){
   const g=$("#wgrid"); g.innerHTML=""; $("#wempty").style.display=watch.length?"none":"";
   watch.forEach(c=>{
