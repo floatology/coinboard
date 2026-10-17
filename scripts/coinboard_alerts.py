@@ -115,10 +115,25 @@ def dex_pairs(c: dict) -> list[dict]:
     return ([main] if main else []) + [p for p in ps if p is not main]
 
 
+def kv_settings() -> tuple[str, str]:
+    """The database's REST address and read-only token from the secrets. Each may hold just the value, or the whole
+    two-line snippet Upstash's copy button gives (UPSTASH_REDIS_REST_URL="..." / UPSTASH_REDIS_REST_TOKEN="...")."""
+    import re
+    raw_url, raw_tok = os.environ.get("KV_REST_API_URL", ""), os.environ.get("KV_REST_API_READ_ONLY_TOKEN", "")
+    m = re.search(r"https://[^\s\"']+", raw_url)
+    url = m.group(0) if m else ""
+    m = re.search(r"TOKEN\s*=\s*[\"']?([^\s\"']+)", raw_tok)
+    tok = m.group(1) if m else raw_tok.strip().strip("\"'")
+    return url, ("" if set(tok) <= {"*"} else tok)
+
+
 def watchlist() -> list[dict]:
     """The coins on the page's watchlist (its Upstash database, read-only), as coin entries; [] without the secrets."""
-    url, tok = os.environ.get("KV_REST_API_URL", "").strip(), os.environ.get("KV_REST_API_READ_ONLY_TOKEN", "").strip()
+    url, tok = kv_settings()
     if not url or not tok:
+        if os.environ.get("KV_REST_API_URL") or os.environ.get("KV_REST_API_READ_ONLY_TOKEN"):
+            print("warning: the watchlist secrets are set but no address or token could be read from them (a token copied "
+                  "while hidden is only stars: copy it again with the eye icon on)")
         return []
     req = urllib.request.Request(url, data=json.dumps(["GET", "coinboard:watch"]).encode(),
                                  headers={"authorization": f"Bearer {tok}", "content-type": "application/json"})
