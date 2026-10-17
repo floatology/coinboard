@@ -436,17 +436,21 @@ async function scan(){
 }
 
 /* ---------- price alerts: tap a coin's price to be told on Telegram when it gets to a level ---------- */
-// Kept in the page's database (api/levels), which the 5-minute check on GitHub reads, and in this browser. The server's
-// list wins once loaded, except for a change this browser could not upload ("lvdirty"), which it sends on the next load.
-let levels=store.get("levels",[]), lvseq=0;
+// Kept in the page's database (api/levels), which the 5-minute check on GitHub reads, and in this browser. Each change is
+// sent on its own ({add} or {remove}), never the whole list, so a browser with an old copy can't wipe alerts set
+// elsewhere; a change that couldn't be sent waits in "lvq" and goes with the next load. The server's list wins.
+let levels=store.get("levels",[]), lvq=store.get("lvq",[]), lvBusy=false;
 const lvId=l=>`${key(l)}:${l.price}:${l.at}`;
 const nowPrice=c=>prices[key(c)]??(info[key(c)]?parseFloat(info[key(c)].priceUsd):null)??c.px??hist[key(c)]?.at(-1)?.[1]??null;
-const saveLevels=()=>{ store.set("levels",levels); store.set("lvdirty",1); const n=++lvseq;
-  fetch("api/levels",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({levels}),signal:AbortSignal.timeout(10000)})
-    .then(r=>{ if(r.ok&&n===lvseq) store.set("lvdirty",0); }).catch(()=>{}); };
-async function loadLevels(){ try{ const r=await fetch("api/levels",{signal:AbortSignal.timeout(10000)}); if(!r.ok) return; const j=await r.json();
-    if(store.get("lvdirty",0)||j.levels===null) saveLevels(); else { levels=j.levels; store.set("levels",levels); }
-    renderLevels(); }catch(e){} }
+const lvApply=(list,q)=>q.reduce((a,o)=>o.add?(a.some(l=>lvId(l)===lvId(o.add))?a:[...a,o.add]):a.filter(l=>lvId(l)!==o.remove),list);
+if(store.get("lvdirty",0)){ lvq=[...levels.map(l=>({add:l})),...lvq]; store.set("lvq",lvq); store.set("lvdirty",0); }  // from the old whole-list saving
+async function lvFlush(){ if(lvBusy) return; lvBusy=true;
+  try{ while(lvq.length){ const r=await fetch("api/levels",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(lvq[0]),signal:AbortSignal.timeout(10000)});
+    if(!r.ok) break; lvq.shift(); store.set("lvq",lvq); } }catch(e){}
+  lvBusy=false; }
+const lvChange=op=>{ lvq.push(op); store.set("lvq",lvq); levels=lvApply(levels,[op]); store.set("levels",levels); renderLevels(); lvFlush(); };
+async function loadLevels(){ try{ await lvFlush(); const r=await fetch("api/levels",{signal:AbortSignal.timeout(10000)}); if(!r.ok) return; const j=await r.json();
+    levels=lvApply(j.levels||[],lvq); store.set("levels",levels); renderLevels(); }catch(e){} }
 // a price, or a change from the current price such as +20% or -15%; null unless it differs from the price now
 const parseLevel=(s,p)=>{ s=String(s).trim().replace(/[−–]/g,"-").replace(/[$,\s]/g,""); const m=s.match(/^([+-]?\d*\.?\d+)%$/);
   const v=m?+(p*(1+parseFloat(m[1])/100)).toPrecision(4):parseFloat(s); return p&&isFinite(v)&&v>0&&Math.abs(v/p-1)>=0.001?v:null; };
@@ -460,12 +464,12 @@ function openLevel(el){ const c=[...holdings,...watch].find(x=>key(x)===el.datas
   box.innerHTML=`<input inputmode="decimal" enterkeyhint="done" aria-label="Alert price" value="${esc(fmtPrice(p).slice(1))}"><button class="set">Alert me</button><button class="x" title="Close">×</button><span class="small">Telegram tells you when the price gets there (checked every 5 minutes). Enter a price, or a change from now like +20% or −15%.</span>`;
   const inp=box.querySelector("input"), set=()=>{ const v=parseLevel(inp.value,p);
     if(!v){ box.querySelector(".small").textContent=`Enter a price above or below today’s ${fmtPrice(p)}, for example ${fmtPrice(p*1.2).slice(1)} or +20%.`; return; }
-    levels.push({chain:c.chain,token:c.token,symbol:c.symbol||c.name,pair:c.pair||"",price:v,dir:v>p?1:-1,at:Math.floor(Date.now()/1000),ref:p});
-    saveLevels(); box.innerHTML=""; renderLevels(); };
+    box.innerHTML="";
+    lvChange({add:{chain:c.chain,token:c.token,symbol:c.symbol||c.name,pair:c.pair||"",price:v,dir:v>p?1:-1,at:Math.floor(Date.now()/1000),ref:p}}); };
   box.querySelector(".set").onclick=set; box.querySelector(".x").onclick=()=>{ box.innerHTML=""; };
   inp.addEventListener("keydown",e=>{ if(e.key==="Enter") set(); }); inp.focus(); inp.select(); }
 document.addEventListener("click",e=>{ const pr=e.target.closest('.card [data-k="price"]'); if(pr) return openLevel(pr.closest(".card"));
-  const rm=e.target.closest("[data-lvrm]"); if(rm){ levels=levels.filter(l=>lvId(l)!==rm.dataset.lvrm); saveLevels(); renderLevels(); } });
+  const rm=e.target.closest("[data-lvrm]"); if(rm) lvChange({remove:rm.dataset.lvrm}); });
 document.addEventListener("visibilitychange",()=>{ if(!document.hidden) loadLevels(); });
 
 /* ---------- wiring ---------- */

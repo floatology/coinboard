@@ -18,7 +18,8 @@
   team       wallets that got a whale-sized amount in a coin's first 30 seconds of trading (often the team or its
              snipers), its creator, and wallets they have passed tokens to: any of them selling or moving 0.25% of supply
              and $1,000 within 24 hours. One message per coin listing them; one alert per wallet per day.
-  levels     the price alerts set on the page (tap a coin's price): once, when a 5-minute reading reaches the level.
+  levels     the price alerts set on the page (tap a coin's price): once, when the price reaches the level, either at a
+             5-minute check or in a trade between two checks (GeckoTerminal's 1-minute highs and lows).
   exit       selling a whole holding at once would move the price 10%, 20% or 35% (live swap quotes taken by the hourly
              build): once per mark, again after the impact has eased to under 70% of that mark. Holdings only.
 
@@ -421,11 +422,32 @@ def price_levels() -> list[dict] | None:
     return out
 
 
+GECKO = {"polygon": "polygon_pos", "avalanche": "avax", "ethereum": "eth"}   # DexScreener chain -> GeckoTerminal network
+
+
+def traded_range(c: dict, pool: str, since: float) -> tuple[float, float, float, float] | None:
+    """(high, its time, low, its time) of the pool's trades since `since`, from GeckoTerminal's 1-minute candles; None if
+    unavailable. A price that only touches a level between two checks (or only on buys, in a pool with a big fee whose
+    buys print ~2% above its sells) is still caught."""
+    url = (f"https://api.geckoterminal.com/api/v2/networks/{GECKO.get(c['chain'], c['chain'])}/pools/{pool}/ohlcv/minute"
+           f"?aggregate=1&limit=20&token={c['token']}")
+    req = urllib.request.Request(url, headers={"user-agent": "Mozilla/5.0 (coinboard)", "accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        rows = [x for x in json.loads(r.read())["data"]["attributes"]["ohlcv_list"] if x[0] >= since - 60]
+    if not rows:
+        return None
+    hi, lo = max(rows, key=lambda x: x[2]), min(rows, key=lambda x: x[3])
+    return float(hi[2]), float(hi[0]), float(lo[3]), float(lo[0])
+
+
 def level_alerts(levels: list[dict] | None, coins: list[dict], watch: list[dict], pairs: dict, state: dict, now: float) -> list:
-    """A level alerts once, when a 5-minute reading is at or beyond it; it stays remembered while it is on the page."""
+    """A level alerts once, when the price reaches it: the price now, or the highest / lowest traded since the previous
+    check. It stays remembered while it is on the page."""
     if levels is None:
         return []
-    sent, out = state.setdefault("sent", {}), []
+    since = max(state.get("lv_seen", now - 600), now - 900)
+    state["lv_seen"] = now
+    sent, out, ranges = state.setdefault("sent", {}), [], {}
     ids = {f"v:{key(l)}:{l['price']}:{l['at']}" for l in levels}
     for k in [k for k in sent if k.startswith("v:") and k not in ids]:
         del sent[k]                                   # removed on the page
@@ -433,16 +455,30 @@ def level_alerts(levels: list[dict] | None, coins: list[dict], watch: list[dict]
     for n, l in enumerate(levels, 1):
         k, ps = f"v:{key(l)}:{l['price']}:{l['at']}", pairs.get(key(l))
         px = float(ps[0]["priceUsd"]) if ps else None
+        rng = None
+        if px is not None and k not in sent:
+            if key(l) not in ranges:
+                try:
+                    ranges[key(l)] = traded_range(l, ps[0]["pairAddress"], since)
+                except Exception:
+                    ranges[key(l)] = None
+            rng = ranges[key(l)]
+        # the best price since the last check, in the alert's direction, and when it traded
+        best, when = px, None
+        if rng and px is not None and (rng[0] if l["dir"] > 0 else rng[2]) * l["dir"] > px * l["dir"]:
+            best, when = (rng[0], rng[1]) if l["dir"] > 0 else (rng[2], rng[3])
         # the public log: which way and how far, never the coin or the level
         print(f"price alert {n}: {'held' if key(l) in known and not known[key(l)].get('watch') else 'not held'}, "
-              f"{'up' if l['dir'] > 0 else 'down'}, " + ("no price read" if px is None else f"price {(px / l['price'] - 1) * 100:+.2f}% from it")
-              + (", already sent" if k in sent else ""))
-        if k in sent or px is None or (px - l["price"]) * l["dir"] < 0:
+              f"{'up' if l['dir'] > 0 else 'down'}, " + ("no price read" if px is None else
+              f"price {(px / l['price'] - 1) * 100:+.2f}% from it, best since the last check {(best / l['price'] - 1) * 100:+.2f}%"
+              + ("" if rng else " (no minute prices)")) + (", already sent" if k in sent else ""))
+        if k in sent or px is None or (best - l["price"]) * l["dir"] < 0:
             continue
         c = known.get(key(l), l)                      # (neither held nor watched any more: no Watchlist tag)
         mc, val = ps[0].get("fdv") or ps[0].get("marketCap"), c.get("qty", 0) * px
+        touched = f" (it traded at {price(best)} at {bkk(when)})" if when and (px - l["price"]) * l["dir"] < 0 else ""
         out.append((f"{tag(c)}🎯 <b>{esc(c['name'])} {'up' if l['dir'] > 0 else 'down'} to {price(l['price'])}</b> (your price alert)\n\n"
-                    f"Price <b>{price(px)}</b>" + (f" · Mcap <b>{usd(mc)}</b>" if mc else "")
+                    f"Price now <b>{price(px)}</b>{touched}" + (f" · Mcap <b>{usd(mc)}</b>" if mc else "")
                     + (f"\n{pct(px / l['ref'] - 1)} since you set it at {price(l['ref'])} on "
                        f"{time.strftime('%d %b', time.gmtime(l['at'] + TZ_HOURS * 3600))}" if l["ref"] and l["at"] else "")
                     + (f"\nYour holding: {usd(val)}" if val >= 1 else "") + "\n\n"
