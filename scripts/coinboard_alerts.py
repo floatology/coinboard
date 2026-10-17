@@ -18,6 +18,7 @@
   team       wallets that got a whale-sized amount in a coin's first 30 seconds of trading (often the team or its
              snipers), its creator, and wallets they have passed tokens to: any of them selling or moving 0.25% of supply
              and $1,000 within 24 hours. One message per coin listing them; one alert per wallet per day.
+  levels     the price alerts set on the page (tap a coin's price): once, when a 5-minute reading reaches the level.
   exit       selling a whole holding at once would move the price 10%, 20% or 35% (live swap quotes taken by the hourly
              build): once per mark, again after the impact has eased to under 70% of that mark. Holdings only.
 
@@ -164,19 +165,25 @@ def kv_settings() -> tuple[str, str]:
     return url, ("" if set(tok) <= {"*"} else tok)
 
 
-def watchlist() -> list[dict]:
-    """The coins on the page's watchlist (its Upstash database, read-only), as coin entries; [] without the secrets."""
+def kv_get(name: str) -> list:
+    """A list the page keeps in its Upstash database (read-only); [] without the secrets."""
     url, tok = kv_settings()
     if not url or not tok:
         if os.environ.get("KV_REST_API_URL") or os.environ.get("KV_REST_API_READ_ONLY_TOKEN"):
             print("warning: the watchlist secrets are set but no address or token could be read from them (a token copied "
                   "while hidden is only stars: copy it again with the eye icon on)")
         return []
-    req = urllib.request.Request(url, data=json.dumps(["GET", "coinboard:watch"]).encode(),
+    req = urllib.request.Request(url, data=json.dumps(["GET", name]).encode(),
                                  headers={"authorization": f"Bearer {tok}", "content-type": "application/json"})
     with urllib.request.urlopen(req, timeout=15) as r:
         v = json.loads(r.read()).get("result")
     items = json.loads(v) if v else []
+    return items if isinstance(items, list) else []
+
+
+def watchlist() -> list[dict]:
+    """The coins on the page's watchlist, as coin entries."""
+    items = kv_get("coinboard:watch")
     return [{"name": x.get("symbol") or "?", "chain": str(x["chain"]), "token": str(x["token"]), "pair": str(x.get("pair") or ""),
              "watch": True} for x in items if isinstance(x, dict) and x.get("chain") and x.get("token")][:30]
 
@@ -189,7 +196,8 @@ def record(kind: str, c: dict, now: float, px: float | None, d: int = 0, **extra
 def send(alerts: list[tuple[str, dict, dict | None]], state: dict) -> None:
     """Send each (message, memory, log entry); keep its memory only once Telegram has it, so a failed send is tried again."""
     for msg, mem, log in alerts:
-        print("alert:", "a watchlist alert" if msg.startswith(WATCH) else msg.split("\n")[0])   # the log is public
+        first = msg.split("\n")[0]                     # the log is public: no watchlist coins, no price alert levels
+        print("alert:", "a watchlist alert" if msg.startswith(WATCH) else "a price alert" if "(your price alert)" in first else first)
         if not telegram_notify.configured():
             continue
         try:
@@ -394,6 +402,52 @@ def report(state: dict, now: float, force: bool = False) -> list:
     return [(msg, {"report": {"t": now, "day": day}}, None)]
 
 
+# ---------- price levels set on the page (tap a price) ----------
+def price_levels() -> list[dict] | None:
+    """The page's price alerts; None when the database couldn't be read (so nothing is forgotten)."""
+    try:
+        items = kv_get("coinboard:levels")
+    except Exception as e:
+        print(f"warning: could not read the price alerts ({e})")
+        return None
+    out = []
+    for x in items:
+        try:
+            out.append({"chain": str(x["chain"]), "token": str(x["token"]), "name": str(x.get("symbol") or "?"),
+                        "pair": str(x.get("pair") or ""), "price": float(x["price"]), "dir": 1 if x.get("dir", 1) > 0 else -1,
+                        "at": int(x.get("at") or 0), "ref": float(x.get("ref") or 0)})
+        except (KeyError, TypeError, ValueError):
+            pass
+    return out
+
+
+def level_alerts(levels: list[dict] | None, coins: list[dict], watch: list[dict], pairs: dict, state: dict, now: float) -> list:
+    """A level alerts once, when a 5-minute reading is at or beyond it; it stays remembered while it is on the page."""
+    if levels is None:
+        return []
+    sent, out = state.setdefault("sent", {}), []
+    ids = {f"v:{key(l)}:{l['price']}:{l['at']}" for l in levels}
+    for k in [k for k in sent if k.startswith("v:") and k not in ids]:
+        del sent[k]                                   # removed on the page
+    known = {key(c): c for c in watch + coins}        # a coin both held and watched counts as held
+    for l in levels:
+        k, ps = f"v:{key(l)}:{l['price']}:{l['at']}", pairs.get(key(l))
+        if k in sent or not ps:
+            continue
+        px = float(ps[0]["priceUsd"])
+        if (px - l["price"]) * l["dir"] < 0:
+            continue
+        c = known.get(key(l), l)                      # (neither held nor watched any more: no Watchlist tag)
+        mc, val = ps[0].get("fdv") or ps[0].get("marketCap"), c.get("qty", 0) * px
+        out.append((f"{tag(c)}🎯 <b>{esc(c['name'])} {'up' if l['dir'] > 0 else 'down'} to {price(l['price'])}</b> (your price alert)\n\n"
+                    f"Price <b>{price(px)}</b>" + (f" · Mcap <b>{usd(mc)}</b>" if mc else "")
+                    + (f"\n{pct(px / l['ref'] - 1)} since you set it at {price(l['ref'])} on "
+                       f"{time.strftime('%d %b', time.gmtime(l['at'] + TZ_HOURS * 3600))}" if l["ref"] and l["at"] else "")
+                    + (f"\nYour holding: {usd(val)}" if val >= 1 else "") + "\n\n"
+                    + chart(c, ps[0]["pairAddress"]), {k: {"t": now}}, record("level", c, now, px)))
+    return out
+
+
 def tick(coins: list[dict], state: dict, now: float) -> list:
     try:
         held = {key(c) for c in coins}
@@ -402,8 +456,11 @@ def tick(coins: list[dict], state: dict, now: float) -> list:
         print(f"warning: could not read the watchlist ({e})")
         watch = []
     print(f"watchlist: {len(watch)} coin(s) not also held")
+    levels = price_levels()
+    print(f"price alerts set: {len(levels) if levels is not None else 'unknown'}")
+    extra = {key(l): {**l, "watch": True} for l in levels or [] if key(l) not in held | {key(w) for w in watch}}
     pairs = {}
-    for c in coins + watch:
+    for c in coins + watch + list(extra.values()):
         try:
             pairs[key(c)] = dex_pairs(c)
         except Exception as e:
@@ -420,7 +477,7 @@ def tick(coins: list[dict], state: dict, now: float) -> list:
         px[key(w)] = h
     track(state, pairs, now)
     return (price_alerts(coins + watch, pairs, state, now) + liquidity_alerts(coins + watch, pairs, state, now)
-            + summary(coins, pairs, state, now, watch) + report(state, now))
+            + level_alerts(levels, coins, watch, pairs, state, now) + summary(coins, pairs, state, now, watch) + report(state, now))
 
 
 # ---------- whales: selling or buying a lot within a day (hourly, from the archives just refreshed) ----------
@@ -697,6 +754,9 @@ def demo(coins: list[dict], now: float) -> list[str]:
     out.append(whale_message(c, "buy", -0.0062 * sup, -15_800, sup, 0.0072 * sup, 0.001 * sup, 0.0072 * sup, now - 2700, zero))
     mc = pairs[key(c)][0].get("fdv") or pairs[key(c)][0].get("marketCap") or 1e6
     out.append(team_message(c, 3, False, 0.0121 * sup, 0.0042 * sup, 0.49 * sup, sup, mc / sup, zero))
+    p0 = float(pairs[key(coins[0])][0]["priceUsd"])        # a price alert set a day ago 10% below today's price
+    lv = [{**coins[0], "price": float(f"{p0 * 0.99:.3g}"), "dir": 1, "at": int(now - 86400), "ref": p0 / 1.1}]
+    out += [m for m, _, _ in level_alerts(lv, coins, watch, pairs, {}, now)]
     out.append(exit_message(c, {"impact": 0.14, "usd": 0.86 * c.get("qty", 0) * float(pairs[key(c)][0]["priceUsd"]), "sell5": 0.31}))
     out += [m for m, _, _ in summary(coins, pairs, {}, now, watch, force=True)]
     fake = [("price", 1, 0.12), ("price", -1, -0.06), ("price", -1, 0.03), ("whale", -1, -0.09), ("whale", -1, 0.02),
@@ -734,7 +794,7 @@ def main() -> int:
             print(f"warning: {a.check} alerts failed ({e})")
     else:
         print("no holdings list yet (data/coinboard_held.json comes from the hourly update)")
-    state["sent"] = {k: m for k, m in state.get("sent", {}).items() if now - m.get("t", 0) < 7 * 86400}
+    state["sent"] = {k: m for k, m in state.get("sent", {}).items() if now - m.get("t", 0) < 7 * 86400 or k.startswith("v:")}
     state["log"] = [x for x in state.get("log", []) if now - x["t"] < REPORT_KEEP]
     if a.check == "hourly":
         try:

@@ -360,10 +360,10 @@ def main() -> int:
                                                                    for c in coins]))
     except Exception as e:
         print(f"warning: could not save the shown holdings ({e})")
-    for f in ("scan.js", "refresh.js", "watch.js"):
+    for f in ("scan.js", "refresh.js", "watch.js", "levels.js"):
         shutil.copy(ROOT / "dashboard/api" / f, out / "api" / f)
     (out / "vercel.json").write_text(json.dumps({
-        "functions": {"api/scan.js": {"maxDuration": 60}, "api/refresh.js": {"maxDuration": 15}, "api/watch.js": {"maxDuration": 15}},
+        "functions": {"api/scan.js": {"maxDuration": 60}, "api/refresh.js": {"maxDuration": 15}, "api/watch.js": {"maxDuration": 15}, "api/levels.js": {"maxDuration": 15}},
         "headers": [{"source": "/(.*)", "headers": [{"key": "X-Robots-Tag", "value": "noindex, nofollow"}, {"key": "Cache-Control", "value": "no-store"}]}]}))
     # the functions' Node.js line, stated here rather than left to the project setting (which Vercel retires with the version)
     (out / "package.json").write_text(json.dumps({"private": True, "engines": {"node": "24.x"}}))

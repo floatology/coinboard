@@ -37,6 +37,12 @@ main{max-width:1500px;margin:0 auto;padding:14px 16px 10px}
 .r{background:var(--aqua);border-radius:10px;padding:8px 10px}.r b{display:block;font-size:11px;font-weight:500;color:var(--muted)}.r span{display:block;font-weight:700;font-size:16px;margin-top:2px}
 .r.main{background:var(--gold);color:#2b1000}.r.main b{color:#4a1d00}.r.main span{color:#2b1000}
 .avg{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:8px;font-size:12px;color:var(--muted)}.avg b{color:var(--ink);font-weight:600}
+.card [data-k="price"]{cursor:pointer}
+.lvs{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.lvs:empty,.lve:empty{display:none}
+.lv{display:inline-flex;align-items:center;gap:2px;background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:2px 2px 2px 10px;font-size:12px}
+.lv.hit{border-color:var(--up);color:var(--up)}.lv button{background:none;color:var(--muted);padding:0 7px;font-size:15px;line-height:1.2}
+.lve{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px}.lve input{flex:1;min-width:0;max-width:200px;background:var(--chip);border:1px solid var(--line);color:var(--ink);border-radius:10px;padding:7px 10px;font:14px var(--ui)}
+.lve .set{background:var(--gold);color:#2b1000;padding:7px 12px;font-size:13px}.lve .small{flex-basis:100%}
 .chart{height:340px;border-top:1px solid var(--line);background:#0d0221}.chart iframe{width:100%;height:100%;border:0;display:block}
 .x{background:none;color:var(--muted);padding:2px 8px;font-size:18px}
 h2{font:600 22px var(--display);color:var(--head);margin:22px 0 10px}
@@ -246,7 +252,7 @@ function buildPortfolio(){
     el.innerHTML=`<div class="top"><div class="row1"><div class="name">${esc(c.symbol||c.name)}<small>${c.chain==="arc"?"Arc":c.chain==="robinhood"?"Robinhood":c.chain}</small></div><div class="pr"><span class="mcap" data-k="mcap"></span><div class="price" data-k="price"></div></div></div>
     <div class="periods">${periodsHTML(c)}</div>
     <div class="roi"><div class="r"><b>Value</b><span data-k="val"></span></div><div class="r"><b>Cost</b><span data-k="cost"></span></div><div class="r"><b>Profit / loss</b><span data-k="pl"></span></div><div class="r main"><b>Return</b><span data-k="ret"></span></div></div>
-    <div class="avg" data-k="avg"></div></div>
+    <div class="avg" data-k="avg"></div><div class="lvs" data-k="lvc"></div><div class="lve" data-k="lve"></div></div>
     <div class="chart dx">${c.pair?`<iframe data-src="${esc(embed(c))}" title="chart"></iframe>`:""}</div>`;
     grid.appendChild(el);
   });
@@ -381,7 +387,7 @@ function buildWatch(){
   watch.forEach(c=>{
     const el=document.createElement("section"); el.className="card"; el.dataset.k=key(c);
     el.innerHTML=`<div class="top"><div class="row1"><div class="name">${esc(c.symbol)}<small>${esc(c.chain)}</small></div><div><span class="price" data-k="price"></span><button class="x" data-rm="${esc(key(c))}" title="Remove">×</button></div></div>
-    <div class="periods">${periodsHTML(c)}</div><div class="roi"><div class="r"><b>Market cap</b><span data-k="mc"></span></div><div class="r"><b>Liquidity</b><span data-k="liq"></span></div><div class="r"><b>24h volume</b><span data-k="vol"></span></div><div class="r main"><b>24h</b><span data-k="d24"></span></div></div></div>
+    <div class="periods">${periodsHTML(c)}</div><div class="roi"><div class="r"><b>Market cap</b><span data-k="mc"></span></div><div class="r"><b>Liquidity</b><span data-k="liq"></span></div><div class="r"><b>24h volume</b><span data-k="vol"></span></div><div class="r main"><b>24h</b><span data-k="d24"></span></div></div><div class="lvs" data-k="lvc"></div><div class="lve" data-k="lve"></div></div>
     <div class="chart dx"><iframe data-src="${esc(embed(c))}" title="chart"></iframe></div>`;
     g.appendChild(el); geckoHist(c);
   });
@@ -426,9 +432,42 @@ async function scan(){
   b.disabled=false; b.textContent="Scan wallets";
 }
 
+/* ---------- price alerts: tap a coin's price to be told on Telegram when it gets to a level ---------- */
+// Kept in the page's database (api/levels), which the 5-minute check on GitHub reads, and in this browser. The server's
+// list wins once loaded, except for a change this browser could not upload ("lvdirty"), which it sends on the next load.
+let levels=store.get("levels",[]), lvseq=0;
+const lvId=l=>`${key(l)}:${l.price}:${l.at}`;
+const nowPrice=c=>prices[key(c)]??(info[key(c)]?parseFloat(info[key(c)].priceUsd):null)??c.px??hist[key(c)]?.at(-1)?.[1]??null;
+const saveLevels=()=>{ store.set("levels",levels); store.set("lvdirty",1); const n=++lvseq;
+  fetch("api/levels",{method:"PUT",headers:{"content-type":"application/json"},body:JSON.stringify({levels}),signal:AbortSignal.timeout(10000)})
+    .then(r=>{ if(r.ok&&n===lvseq) store.set("lvdirty",0); }).catch(()=>{}); };
+async function loadLevels(){ try{ const r=await fetch("api/levels",{signal:AbortSignal.timeout(10000)}); if(!r.ok) return; const j=await r.json();
+    if(store.get("lvdirty",0)||j.levels===null) saveLevels(); else { levels=j.levels; store.set("levels",levels); }
+    renderLevels(); }catch(e){} }
+// a price, or a change from the current price such as +20% or -15%; null unless it differs from the price now
+const parseLevel=(s,p)=>{ s=String(s).trim().replace(/[−–]/g,"-").replace(/[$,\s]/g,""); const m=s.match(/^([+-]?\d*\.?\d+)%$/);
+  const v=m?+(p*(1+parseFloat(m[1])/100)).toPrecision(4):parseFloat(s); return p&&isFinite(v)&&v>0&&Math.abs(v/p-1)>=0.001?v:null; };
+function renderLevels(){ document.querySelectorAll(".card[data-k]").forEach(el=>{ const box=el.querySelector('[data-k="lvc"]'); if(!box) return;
+  const c=[...holdings,...watch].find(x=>key(x)===el.dataset.k), p=c?nowPrice(c):null;
+  box.innerHTML=levels.filter(l=>key(l)===el.dataset.k).sort((a,b)=>b.price-a.price).map(l=>{ const hit=p!=null&&(p-l.price)*l.dir>=0;
+    return `<span class="lv${hit?" hit":""}" title="Set ${esc(fmtWhen(l.at))} at ${esc(fmtPrice(l.ref))}">🎯 ${l.dir>0?"↑":"↓"} ${fmtPrice(l.price)}${hit?" reached":""}<button data-lvrm="${esc(lvId(l))}" title="Remove">×</button></span>`; }).join(""); }); }
+function openLevel(el){ const c=[...holdings,...watch].find(x=>key(x)===el.dataset.k), box=el.querySelector('[data-k="lve"]'); if(!c||!box) return;
+  if(box.innerHTML){ box.innerHTML=""; return; }                // a second tap closes it
+  const p=nowPrice(c); if(!p) return;
+  box.innerHTML=`<input inputmode="decimal" enterkeyhint="done" aria-label="Alert price" value="${esc(fmtPrice(p).slice(1))}"><button class="set">Alert me</button><button class="x" title="Close">×</button><span class="small">Telegram tells you when the price gets there (checked every 5 minutes). Enter a price, or a change from now like +20% or −15%.</span>`;
+  const inp=box.querySelector("input"), set=()=>{ const v=parseLevel(inp.value,p);
+    if(!v){ box.querySelector(".small").textContent=`Enter a price above or below today’s ${fmtPrice(p)}, for example ${fmtPrice(p*1.2).slice(1)} or +20%.`; return; }
+    levels.push({chain:c.chain,token:c.token,symbol:c.symbol||c.name,pair:c.pair||"",price:v,dir:v>p?1:-1,at:Math.floor(Date.now()/1000),ref:p});
+    saveLevels(); box.innerHTML=""; renderLevels(); };
+  box.querySelector(".set").onclick=set; box.querySelector(".x").onclick=()=>{ box.innerHTML=""; };
+  inp.addEventListener("keydown",e=>{ if(e.key==="Enter") set(); }); inp.focus(); inp.select(); }
+document.addEventListener("click",e=>{ const pr=e.target.closest('.card [data-k="price"]'); if(pr) return openLevel(pr.closest(".card"));
+  const rm=e.target.closest("[data-lvrm]"); if(rm){ levels=levels.filter(l=>lvId(l)!==rm.dataset.lvrm); saveLevels(); renderLevels(); } });
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden) loadLevels(); });
+
 /* ---------- wiring ---------- */
-function render(){ renderPortfolio(); renderWatch(); renderMarket();
-  $("#foot").textContent=`Prices live from DexScreener every 30 s; hourly history from GeckoTerminal; holdings as of ${saved?.at?"your last scan":"the build ("+fmtWhen(DATA.built)+")"}. * = held for less than that period (the coin’s move, not yours). Press Scan wallets after any buy or sell.`; }
+function render(){ renderPortfolio(); renderWatch(); renderMarket(); renderLevels();
+  $("#foot").textContent=`Prices live from DexScreener every 30 s; hourly history from GeckoTerminal; holdings as of ${saved?.at?"your last scan":"the build ("+fmtWhen(DATA.built)+")"}. * = held for less than that period (the coin’s move, not yours). Press Scan wallets after any buy or sell. Tap a coin’s price to set a Telegram price alert.`; }
 async function refresh(){
   await Promise.all([...holdings,...watch].map(async c=>{ try{ const p=await dexToken(c.chain,c.token); if(p){ prices[key(c)]=parseFloat(p.priceUsd); info[key(c)]=p; } }catch(e){} }));
   render();
@@ -457,7 +496,7 @@ const fobs=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting&&e.i
 const _bw=buildWatch, _bp=buildPortfolio, _bm=buildMarket; buildWatch=function(){ _bw(); watchFrames(); }; buildPortfolio=function(){ _bp(); watchFrames(); }; buildMarket=function(){ _bm(); watchFrames(); };
 function watchFrames(){ live=live.filter(f=>f.isConnected); document.querySelectorAll("iframe[data-src]").forEach(f=>{ if(!f.dataset.seen){ f.dataset.seen="1"; fobs.observe(f); } }); }
 buildPortfolio(); buildMarket(); renderMarket(); buildWatch(); render(); refresh(); setInterval(refresh,30000);
-holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); holdings.forEach(geckoMinutes); setInterval(()=>holdings.forEach(geckoMinutes),300000); loadMarket(); setInterval(loadMarket,300000); loadWatch();
+holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); holdings.forEach(geckoMinutes); setInterval(()=>holdings.forEach(geckoMinutes),300000); loadMarket(); setInterval(loadMarket,300000); loadWatch(); loadLevels();
 </script>
 </body>
 </html>
