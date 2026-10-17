@@ -9,6 +9,9 @@
   liquidity  all of a coin's pools together losing 30% or more of their dollar liquidity within an hour, seen on two
              checks in a row (a rug warning); again after 6 hours or a further 30% drop.
   summary    once a day at 08:00 Bangkok time: the portfolio and each coin over 24 hours, whale alerts, holder changes.
+  report     Sundays after the summary: the week's alerts by type, and where the price went in the 24 hours after each
+             (its price 24 hours on comes from the 5-minute check's own readings, so coins no longer held or watched
+             have none).
   whales     selling: a wallet holding at least 0.5% of supply (NET 0.1%) whose sales minus buys over 24 hours reach a
              quarter of its holding, 0.25% of supply and $10,000. Buying: a wallet whose buys minus sales over 24 hours
              reach 0.5% of supply and $10,000. Moves between wallets don't count. One alert per wallet and side per day.
@@ -34,6 +37,7 @@ import html
 import json
 import math
 import os
+import statistics
 import sys
 import time
 import urllib.request
@@ -74,6 +78,9 @@ TEAM_USD = 1_000             # ... and its value
 TEAM_LINK = 0.2              # a plain transfer of this share of the whale threshold to a new wallet links that wallet
 
 EXIT_MARKS = (0.10, 0.20, 0.35)   # price impact of selling a whole holding at once
+
+REPORT_DAY = 6               # the weekly report card: Sundays (Monday = 0), with the daily summary
+REPORT_KEEP = 9 * 86400      # alerts remembered for it
 
 SUMMARY_HOUR = 8             # the daily summary at 08:00 ...
 TZ_HOURS = 7                 # ... Bangkok time (UTC+7, no daylight saving), the time every alert shows
@@ -174,6 +181,11 @@ def watchlist() -> list[dict]:
              "watch": True} for x in items if isinstance(x, dict) and x.get("chain") and x.get("token")][:30]
 
 
+def record(kind: str, c: dict, now: float, px: float | None, d: int = 0, **extra) -> dict:
+    """An alert as the weekly report card sees it: d is the way it points the price (+1 up, -1 down, 0 neither)."""
+    return {"t": now, "kind": kind, "coin": c["name"], "key": key(c), "watch": bool(c.get("watch")), "px": px, "dir": d, **extra}
+
+
 def send(alerts: list[tuple[str, dict, dict | None]], state: dict) -> None:
     """Send each (message, memory, log entry); keep its memory only once Telegram has it, so a failed send is tried again."""
     for msg, mem, log in alerts:
@@ -233,7 +245,8 @@ def price_alerts(coins: list[dict], pairs: dict, state: dict, now: float) -> lis
                                  + [f"{w}h {pct(x)}" for w, x in chs.items()]) + "\n"
                     f"Price <b>{price(px)}</b>" + (f" · Mcap <b>{usd(mc)}</b>" if mc else "") + hold
                     + "\n\n" + chart(c, p["pairAddress"]),
-                    {f"p:{key(c)}:{w}": {"t": now, "dir": 1 if chs[w] > 0 else -1, "level": chs[w]} for w in fired}, None))
+                    {f"p:{key(c)}:{w}": {"t": now, "dir": 1 if chs[w] > 0 else -1, "level": chs[w]} for w in fired},
+                    record("price", c, now, px, 1 if ch > 0 else -1)))
     return out
 
 
@@ -266,7 +279,7 @@ def liquidity_alerts(coins: list[dict], pairs: dict, state: dict, now: float) ->
                     f"Price in the same time: {pct(px / peak[2] - 1)}.\n\n"
                     "A sudden drop like this can mean liquidity is being pulled (a rug), which makes the coin hard to sell.\n\n"
                     + chart(c, ps[0]["pairAddress"]),
-                    {f"l:{key(c)}": {"t": now, "level": total}}, None))
+                    {f"l:{key(c)}": {"t": now, "level": total}}, record("liquidity", c, now, px, -1)))
     return out
 
 
@@ -318,6 +331,69 @@ def summary(coins: list[dict], pairs: dict, state: dict, now: float, watch: list
              {"summary": {"t": now, "day": day}}, None)]
 
 
+# ---------- the weekly report card: how many alerts fired, and what the price did in the 24 hours after ----------
+REPORT_KINDS = (("price", 1, "📈 Price jumps"), ("price", -1, "📉 Price drops"), ("whale", -1, "🐋 Whales selling"),
+                ("whale", 1, "🐳 Whales buying"), ("team", -1, "👀 Launch wallets"), ("liquidity", -1, "🚨 Liquidity pulls"),
+                ("exit", 0, "🚪 Exit liquidity"), ("level", 0, "🎯 Your price levels"))
+
+
+def track(state: dict, pairs: dict, now: float) -> None:
+    """Bring the hourly check's alerts (passed on in the facts file) into this check's log, and note each alert's price
+    when it fired (if the hourly check had none) and 24 hours later, from this check's own price readings."""
+    log = state.setdefault("log", [])
+    ident = lambda x: (x["t"], x.get("kind"), x.get("key"), x.get("side"), x.get("usd"))
+    seen = {ident(x) for x in log}
+    log += [dict(x) for x in load(FACTS, {}).get("alerts", []) if x.get("kind") and ident(x) not in seen]
+    for x in log:
+        ps = pairs.get(x.get("key"))
+        if ps:
+            p = float(ps[0]["priceUsd"])
+            if x.get("px") is None and now - x["t"] < 2 * 3600:
+                x["px"] = p
+            if x.get("px24") is None and 86400 <= now - x["t"] < 86400 + 3 * 3600:
+                x["px24"] = p
+    log.sort(key=lambda x: x["t"])
+
+
+def report(state: dict, now: float, force: bool = False) -> list:
+    local = now + TZ_HOURS * 3600
+    day = time.strftime("%Y-%m-%d", time.gmtime(local))
+    if not force and (time.gmtime(local).tm_wday != REPORT_DAY or time.gmtime(local).tm_hour < SUMMARY_HOUR
+                      or state.get("sent", {}).get("report", {}).get("day") == day):
+        return []
+    xs = [x for x in state.get("log", []) if now - x["t"] < 7 * 86400 and x.get("kind")]
+    lines, calls = [], []
+    for kind, d, label in REPORT_KINDS:
+        g = [x for x in xs if x["kind"] == kind and (d == 0 or x.get("dir") == d)]
+        if not g:
+            continue
+        r = [(x["px24"] / x["px"] - 1, x) for x in g if x.get("px") and x.get("px24")]
+        line = f"{label}: <b>{len(g)}</b>"
+        if d and r:
+            moves = sorted(v for v, _ in r)
+            line += (f" · 24h later: median {pct(statistics.median(moves))}, "
+                     f"the alert's way {sum(1 for v in moves if v * d > 0)} of {len(moves)}")
+            calls += [(v * d, v, label, x) for v, x in r]
+        lines.append(line)
+    when = lambda t: time.strftime("%a %d %b", time.gmtime(t + TZ_HOURS * 3600))
+    msg = f"📋 <b>Weekly alert report</b> · {when(now - 6 * 86400)} to {when(now)}\n\n"
+    if not xs:
+        msg += "No alerts in the last 7 days."
+    else:
+        held = sum(1 for x in xs if not x.get("watch"))
+        msg += (f"{len(xs)} alert{'s' if len(xs) != 1 else ''} ({held} on your holdings, {len(xs) - held} on the watchlist)\n\n"
+                + "\n".join(lines))
+        if calls:
+            calls.sort(key=lambda z: z[0])
+            name = lambda z: f"{z[2].split(' ', 1)[1]} {esc(z[3]['coin'])}{' (watchlist)' if z[3].get('watch') else ''}, {when(z[3]['t'])}"
+            msg += f"\n\nBest call: {name(calls[-1])}, {pct(calls[-1][1])} in 24h"
+            if len(calls) > 1:
+                msg += f"\nWorst call: {name(calls[0])}, {pct(calls[0][1])} in 24h"
+        msg += ("\n\n<i>The alert's way: the price moved where the alert pointed over the next 24 hours (further up after a "
+                "jump; down after a drop, whales selling, launch wallets or a liquidity pull; up after whales buying).</i>")
+    return [(msg, {"report": {"t": now, "day": day}}, None)]
+
+
 def tick(coins: list[dict], state: dict, now: float) -> list:
     try:
         held = {key(c) for c in coins}
@@ -342,7 +418,9 @@ def tick(coins: list[dict], state: dict, now: float) -> list:
         if ps and (not h or now - h[-1][0] >= 600):
             h.append([now, float(ps[0]["priceUsd"])])
         px[key(w)] = h
-    return price_alerts(coins + watch, pairs, state, now) + liquidity_alerts(coins + watch, pairs, state, now) + summary(coins, pairs, state, now, watch)
+    track(state, pairs, now)
+    return (price_alerts(coins + watch, pairs, state, now) + liquidity_alerts(coins + watch, pairs, state, now)
+            + summary(coins, pairs, state, now, watch) + report(state, now))
 
 
 # ---------- whales: selling or buying a lot within a day (hourly, from the archives just refreshed) ----------
@@ -404,6 +482,7 @@ def hourly(coins: list[dict], state: dict, now: float) -> list:
                                      or (q <= {-WHALE_BUY_SUPPLY * sup} and u <= {-WHALE_USD})""").fetchall()
         whale = WHALE_SIZE * cfg["th"][0] / 100 * sup
         b0 = con.execute(f"select min(block) from {L} where ts > {t0}").fetchone()[0]
+        px_now = (con.execute(f"select price_usd from {L} where usd >= 5 order by block desc, log_index desc limit 1").fetchone() or [None])[0]
         try:
             out += team_alerts(c, cfg, d, con, excl, sup, b0, team, sent, now)
         except Exception as e:
@@ -425,7 +504,7 @@ def hourly(coins: list[dict], state: dict, now: float) -> list:
             if side == "sell" and (peak < whale or q < WHALE_SOLD * peak):
                 continue
             out.append((whale_message(c, side, q, u, sup, peak, start, bal, last_trade, addr), {k: {"t": now}},
-                        {"t": now, "coin": c["name"], "side": side, "usd": abs(u), "watch": bool(c.get("watch"))}))
+                        record("whale", c, now, px_now, -1 if side == "sell" else 1, side=side, usd=abs(u))))
     try:
         TEAMS.write_text(json.dumps(team))
     except Exception as e:
@@ -518,7 +597,7 @@ def team_alerts(c: dict, cfg: dict, d: Path, con, excl: set, sup: float, b0: int
     sold, moved = sum(flows[w][0] for w in fired), sum(flows[w][1] for w in fired)
     top = max(fired, key=lambda w: sum(flows[w]))
     return [(team_message(c, len(fired), e["creator"] in fired, sold, moved, float(held) / 10 ** dec, sup, px, top),
-             {f"t:{key(c)}:{w}": {"t": now} for w in fired}, None)]
+             {f"t:{key(c)}:{w}": {"t": now} for w in fired}, record("team", c, now, px or None, -1))]
 
 
 def team_message(c: dict, n: int, creator: bool, sold: float, moved: float, held: float, sup: float, px: float, top: str) -> str:
@@ -548,7 +627,7 @@ def exit_alerts(coins: list[dict], state: dict, now: float) -> list:
             last = eased
         mark = max((m for m in EXIT_MARKS if x["impact"] >= m), default=0)
         if mark > last:
-            out.append((exit_message(c, x), {k: {"t": now, "level": mark}}, None))
+            out.append((exit_message(c, x), {k: {"t": now, "level": mark}}, record("exit", c, now, None)))
     return out
 
 
@@ -581,7 +660,9 @@ def facts(state: dict, now: float) -> None:
     """For the daily summary (made by the 5-minute check): the last day's whale alerts and each coin's holder count."""
     an = load(ROOT / "dashboard/site/analytics.json", {}).get("coins", {})
     holders = {n: [x["rows"][-1]["holders"], x["rows"][-2]["holders"]] for n, x in an.items() if len(x.get("rows", [])) >= 2}
-    FACTS.write_text(json.dumps({"t": now, "whales": [x for x in state.get("log", []) if now - x["t"] < 86400], "holders": holders}))
+    log = state.get("log", [])
+    FACTS.write_text(json.dumps({"t": now, "whales": [x for x in log if x.get("kind", "whale") == "whale" and now - x["t"] < 86400],
+                                 "alerts": [x for x in log if now - x["t"] < REPORT_KEEP], "holders": holders}))
 
 
 def demo(coins: list[dict], now: float) -> list[str]:
@@ -618,6 +699,11 @@ def demo(coins: list[dict], now: float) -> list[str]:
     out.append(team_message(c, 3, False, 0.0121 * sup, 0.0042 * sup, 0.49 * sup, sup, mc / sup, zero))
     out.append(exit_message(c, {"impact": 0.14, "usd": 0.86 * c.get("qty", 0) * float(pairs[key(c)][0]["priceUsd"]), "sell5": 0.31}))
     out += [m for m, _, _ in summary(coins, pairs, {}, now, watch, force=True)]
+    fake = [("price", 1, 0.12), ("price", -1, -0.06), ("price", -1, 0.03), ("whale", -1, -0.09), ("whale", -1, 0.02),
+            ("whale", 1, 0.05), ("team", -1, -0.17), ("exit", 0, 0.0)]
+    log = [{**record(k, (coins + watch)[i % len(coins + watch)], now - (6 - i * 0.7) * 86400, 1.0, d), "px24": 1 + r}
+           for i, (k, d, r) in enumerate(fake)]
+    out += [m for m, _, _ in report({"log": log}, now, force=True)]
     out.append(coinboard_tick.stale_text(2, "Refresh, analyse, build, deploy", "https://github.com/floatology/coinboard/actions"))
     out.append(coinboard_tick.CRON_DOWN)
     return out
@@ -649,7 +735,7 @@ def main() -> int:
     else:
         print("no holdings list yet (data/coinboard_held.json comes from the hourly update)")
     state["sent"] = {k: m for k, m in state.get("sent", {}).items() if now - m.get("t", 0) < 7 * 86400}
-    state["log"] = [x for x in state.get("log", []) if now - x["t"] < 2 * 86400]
+    state["log"] = [x for x in state.get("log", []) if now - x["t"] < REPORT_KEEP]
     if a.check == "hourly":
         try:
             facts(state, now)
