@@ -73,6 +73,7 @@ nav button.on{box-shadow:0 1px 12px rgba(45,226,230,.35)}
 .hero .horizon::after{width:210px;height:104px;border-radius:90px 90px 0 0}
 .hero header{position:relative;z-index:2;background:none;grid-template-columns:1fr auto;padding-top:14px}
 .hero .total{position:absolute;z-index:2;left:50%;transform:translateX(-50%);bottom:66px;text-align:center;pointer-events:none;white-space:nowrap}
+.hero .total>span{pointer-events:auto;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none}
 .hero .total .big{color:rgba(255,255,255,.93);text-shadow:0 0 10px rgba(13,2,33,.85),0 0 22px rgba(255,42,109,.6)}
 .hero .total .sub{margin-top:6px}.hero .total .sub b{background:rgba(13,2,33,.62);border-radius:999px;padding:2px 12px;font-size:14px;backdrop-filter:blur(2px)}
 @media(max-width:520px){.hero{height:170px}.hero .horizon::after{width:150px;height:76px}.hero .total{bottom:56px}.hero .total .big{font-size:30px}}
@@ -94,7 +95,7 @@ h1.logo img{height:62px}@media(max-width:520px){h1.logo img{height:36px}}
 </style>
 </head>
 <body>
-<div class="hero"><div class="horizon"><div class="palms"></div></div><div class="total" id="total"></div><div class="vchart" id="vchart" role="button"></div>
+<div class="hero"><div class="horizon"><div class="palms"></div></div><div class="total" id="total" role="button"></div><div class="vchart" id="vchart" role="button"></div>
 <header>
   <h1 class="logo"><img src="__LOGO__" alt="Avava Labs"></h1>
   <div class="actions"><button id="scan">Scan wallets</button></div>
@@ -293,9 +294,16 @@ function renderPortfolio(){
     q("avg").innerHTML=`<span>Avg buy <b>${fmtPrice(avgb)}</b></span>${avgs?`<span>Avg sell <b>${fmtPrice(avgs)}</b></span><span>Realised <b class="${cls(c.realised)}">${c.realised>=0?"+":"−"}${fmtUSD(Math.abs(c.realised))}</b></span>`:""}<span>Holding <b>${c.qty.toLocaleString("en-US",{maximumFractionDigits:2})}</b></span>`;
   });
   renderGlance(); renderValue(V);
-  const pl=V-C;
-  $("#total").innerHTML=`<span class="big">${fmtUSD(V)}</span><span class="sub"><b class="${cls(pl)}">${fmtPct(V/C-1)}</b></span>`;
+  totV=V; totC=C; renderTotal();
 }
+// the balance and its change: tap to star them out (showing the screen to someone), tap again for the numbers; a reload
+// always shows the numbers. Hidden, the change keeps no colour, so it doesn't tell up from down either.
+let hideBal=false, totV=0, totC=0;
+function renderTotal(){ const t=$("#total"), pl=totV-totC;
+  t.innerHTML=hideBal?`<span class="big">$******</span><span class="sub"><b>****</b></span>`
+                     :`<span class="big">${fmtUSD(totV)}</span><span class="sub"><b class="${cls(pl)}">${fmtPct(totV/totC-1)}</b></span>`;
+  t.setAttribute("aria-pressed",hideBal); t.title=hideBal?"Tap to show the balance":"Tap to hide the balance"; }
+$("#total").onclick=()=>{ hideBal=!hideBal; renderTotal(); };
 
 /* ---------- market reference: Bitcoin and Ethereum ---------- */
 const MKT=[{id:"bitcoin",name:"Bitcoin",sym:"BTC",pair:"0x56534741CD8B152df6d48AdF7ac51f75169A83b2"},{id:"ethereum",name:"Ethereum",sym:"ETH",pair:"0x4e68Ccd3E89f51C3074ca5072bbAC773960dFa36"}]; const mk={}; for(const m of MKT) if(DATA.mkt&&DATA.mkt[m.id]) mk[m.id]=DATA.mkt[m.id];
