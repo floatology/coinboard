@@ -562,6 +562,7 @@ def hourly(coins: list[dict], state: dict, now: float) -> list:
                 continue
             out.append((whale_message(c, side, q, u, sup, peak, start, bal, last_trade, addr), {k: {"t": now}},
                         record("whale", c, now, px_now, -1 if side == "sell" else 1, side=side, usd=abs(u))))
+    print(f"launch wallets known for {len(team)} coin(s)")
     try:
         TEAMS.write_text(json.dumps(team))
     except Exception as e:
