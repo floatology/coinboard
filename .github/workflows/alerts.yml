@@ -1,7 +1,9 @@
 name: alerts
 # Coin Board's 5-minute tick. cron-job.org starts it through GitHub's API every 5 minutes (on time, unlike GitHub's own
 # schedule, which runs late or not at all when busy; that stays below as a fallback). It starts the hourly update
-# (coinboard.yml) when due and warns on Telegram if the board stops updating; the price alerts will run here too. Run it by hand with "force update" to start
+# (coinboard.yml) when due, warns on Telegram if the board stops updating, and sends the price alerts (a held coin
+# moving 10% or more in 6 hours: scripts/coinboard_alerts.py). The holdings list comes from the hourly update through a
+# small cache; what was already alerted is kept in another. Run it by hand with "force update" to start
 # the hourly update now.
 on:
   workflow_dispatch:
@@ -31,3 +33,27 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python3 scripts/coinboard_tick.py
+      - name: Holdings (from the latest hourly update)
+        uses: actions/cache/restore@v6
+        with:
+          path: data/coinboard_held.json
+          key: coinboard-held-${{ github.run_id }}
+          restore-keys: coinboard-held-
+      - name: Alerts already sent
+        uses: actions/cache/restore@v6
+        with:
+          path: data/alerts_price.json
+          key: alerts-price-${{ github.run_id }}
+          restore-keys: alerts-price-
+      - name: Price alerts
+        id: price
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python3 scripts/coinboard_alerts.py price
+      - name: Remember the alerts sent
+        if: steps.price.outputs.changed == '1'
+        uses: actions/cache/save@v6
+        with:
+          path: data/alerts_price.json
+          key: alerts-price-${{ github.run_id }}

@@ -45,6 +45,20 @@ def coin_config(c: dict) -> dict:
                 note=k.get("note", ""))
 
 
+def excluded(cfg: dict, d: Path) -> set[str]:
+    """Addresses that are not holders: the coin's own exclusions, burn addresses, and its pools / pairs (archive metadata)."""
+    excl = set(cfg["excl"]) | {ZERO, DEAD}
+    meta_p = d / "meta.json"
+    if meta_p.exists():
+        m = json.loads(meta_p.read_text())
+        excl |= {a.lower() for a in m.get("pair_addrs", [])} | {a.lower() for a in m.get("v3_pools", {})} | \
+                {a.lower() for a in m.get("other_pairs", [])} | {a.lower() for a in m.get("pools", {}) if len(a) == 42}
+    pools_p = d / "pools.json"
+    if pools_p.exists():
+        excl |= {a.lower() for a in json.loads(pools_p.read_text()) if len(a) == 42}
+    return excl
+
+
 def analyse(name: str, cfg: dict, days: int) -> dict:
     d = ROOT / cfg["dir"]
     con = duckdb.connect()
@@ -58,16 +72,7 @@ def analyse(name: str, cfg: dict, days: int) -> dict:
             hourly[int(ts // 3600)] = px
     ath_h, ath = max(hourly.items(), key=lambda kv: kv[1]) if hourly else (0, 0)
     day0 = int(now // 86400) - days + 1
-    # pair/pool addresses from the archive metadata (v3 pools, DexScreener pairs)
-    excl = set(cfg["excl"]) | {ZERO, DEAD}
-    meta_p = d / "meta.json"
-    if meta_p.exists():
-        m = json.loads(meta_p.read_text())
-        excl |= {a.lower() for a in m.get("pair_addrs", [])} | {a.lower() for a in m.get("v3_pools", {})} | \
-                {a.lower() for a in m.get("other_pairs", [])} | {a.lower() for a in m.get("pools", {}) if len(a) == 42}
-    pools_p = d / "pools.json"
-    if pools_p.exists():
-        excl |= {a.lower() for a in json.loads(pools_p.read_text()) if len(a) == 42}
+    excl = excluded(cfg, d)
     # daily trade stats
     daily = {}
     for ts, b, side, usd, px in led:

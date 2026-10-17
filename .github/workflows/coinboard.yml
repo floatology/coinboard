@@ -65,6 +65,8 @@ jobs:
           POSITIONS_JSON: ${{ secrets.POSITIONS_JSON }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_PROJECT: ${{ secrets.VERCEL_PROJECT }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}     # the whale alerts, after the deploy
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           printf '%s' "$POSITIONS_JSON" > /tmp/positions.json
           .venv/bin/python scripts/coinboard_ci.py --positions /tmp/positions.json
@@ -73,13 +75,20 @@ jobs:
         with:
           path: data
           key: coinboard-data-${{ github.run_id }}
-      - name: Delete older archive caches (keeps the newest 3)
+      - name: Save the holdings list for the 5-minute price alerts
+        uses: actions/cache/save@v6
+        with:
+          path: data/coinboard_held.json
+          key: coinboard-held-${{ github.run_id }}
+      - name: Delete older caches (keeps the newest 3 of each kind)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh cache list --key coinboard-data- --sort created_at --order desc --limit 100 --json id --jq '.[3:][].id' |
-            while read -r id; do gh cache delete "$id"; done
+          for kind in coinboard-data- coinboard-held- alerts-price-; do
+            gh cache list --key "$kind" --sort created_at --order desc --limit 100 --json id --jq '.[3:][].id' |
+              while read -r id; do gh cache delete "$id"; done
+          done
       - name: Back up archives (when the backup is over 20 hours old, or missing)
         continue-on-error: true
         env:
