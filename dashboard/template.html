@@ -124,6 +124,9 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[ch]);
 const HOURS = [["1h",1],["6h",6],["12h",12],["24h",24],["1 week",168]];
 const fmtUSD = v => "$" + v.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+// every date and time on the page is Bangkok time, whatever device it is opened on
+const TZ = "Asia/Bangkok";
+const fmtWhen = t => new Date(t*1000).toLocaleString("en-GB",{timeZone:TZ,day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"})+" Bangkok time";
 const fmtPct = v => v==null||!isFinite(v) ? "n/a" : (v>=0?"+":"−") + Math.abs(v*100).toFixed(1) + "%";
 const cls = v => v==null ? "" : (v>=0 ? "pos" : "neg");
 const fmtMcap = v => v>=1e9 ? "$"+(v/1e9).toFixed(1)+"B" : v>=1e6 ? "$"+(v/1e6).toFixed(1)+"M" : v>=1e3 ? "$"+Math.round(v/1e3)+"k" : "$"+Math.round(v);
@@ -150,7 +153,7 @@ function chart(el, series, o={}){
   const X=t=>L+(t-x0)/(x1-x0||1)*(W-L-R), Y=v=>T+(1-(v-lo)/(hi-lo))*(H-T-B);
   let g="";
   for(let i=0;i<3;i++){ const v=lo+(hi-lo)*i/2, y=Y(v); g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="#24324f" stroke-width=".5"/><text x="${L-4}" y="${y+3}" text-anchor="end">${(o.fmt||short)(v)}</text>`; }
-  [0,.5,1].forEach(f=>{ const t=x0+(x1-x0)*f; g+=`<text x="${X(t)}" y="${H-3}" text-anchor="${f==0?"start":f==1?"end":"middle"}">${new Date(t*1000).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</text>`; });
+  [0,.5,1].forEach(f=>{ const t=x0+(x1-x0)*f; g+=`<text x="${X(t)}" y="${H-3}" text-anchor="${f==0?"start":f==1?"end":"middle"}">${new Date(t*1000).toLocaleDateString("en-GB",{timeZone:TZ,day:"numeric",month:"short"})}</text>`; });
   series.forEach((s,i)=>{ const pts=s.pts.filter(p=>p[1]!=null&&isFinite(p[1])); if(!pts.length||s.hidden) return;
     const d=pts.map((p,k)=>(k?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1)).join(" ");
     g+=`<defs><linearGradient id="g${o.id}${i}" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${s.color}" stop-opacity="${s.fill??.22}"/><stop offset="1" stop-color="${s.color}" stop-opacity="0"/></linearGradient></defs>`;
@@ -161,7 +164,7 @@ function chart(el, series, o={}){
   const move=ev=>{ const r=svg.getBoundingClientRect(), cx=(ev.touches?ev.touches[0].clientX:ev.clientX), t=x0+((cx-r.left)/r.width*W-L)/(W-L-R)*(x1-x0);
     const rows=series.map(s=>{ let b=null; for(const p of s.pts){ if(b==null||Math.abs(p[0]-t)<Math.abs(b[0]-t)) b=p; } return [s,b]; }).filter(x=>x[1]&&x[1][1]!=null);
     if(!rows.length) return; const tt=rows[0][1][0]; cur.setAttribute("x1",X(tt)); cur.setAttribute("x2",X(tt)); cur.style.display="";
-    tip.innerHTML=`<b>${new Date(tt*1000).toLocaleDateString("en-GB",{day:"numeric",month:"short"})}</b><br>`+rows.map(([s,p])=>`<span style="color:${s.color}">●</span> ${s.name}: ${(o.fmt||short)(p[1])}`).join("<br>");
+    tip.innerHTML=`<b>${new Date(tt*1000).toLocaleDateString("en-GB",{timeZone:TZ,day:"numeric",month:"short"})}</b><br>`+rows.map(([s,p])=>`<span style="color:${s.color}">●</span> ${s.name}: ${(o.fmt||short)(p[1])}`).join("<br>");
     tipY=scrollY; tip.style.display="block"; const tw=tip.offsetWidth; tip.style.left=Math.max(6,(cx+12+tw<innerWidth-6)?cx+12:cx-tw-12)+"px"; tip.style.top=(ev.touches?ev.touches[0].clientY:ev.clientY)-60+"px"; };
   const hide=()=>{cur.style.display="none";tip.style.display="none"}; let ht;
   svg.addEventListener("pointermove",e=>{ if(e.pointerType==="mouse") move(e); }); svg.addEventListener("pointerleave",e=>{ if(e.pointerType==="mouse") hide(); });
@@ -328,7 +331,7 @@ let AN=null;
 async function buildAnalytics(){
   const box=$("#agrid");  if(!AN){ try{ AN=await (await fetch("analytics.json")).json(); }catch(e){ box.innerHTML='<p class="small">Analytics file missing.</p>'; return; } }
   box.innerHTML="";
-  if(AN.built&&!/started/.test($("#asof").textContent)) $("#asof").textContent="Holder and volume data as of "+new Date(AN.built*1000).toUTCString().slice(5,22)+" UTC";
+  if(AN.built&&!/started/.test($("#asof").textContent)) $("#asof").textContent="Holder and volume data as of "+fmtWhen(AN.built);
   holdings.forEach(c=>{
     const a=AN.coins[c.symbol||c.name]; if(!a) return; const r=a.rows, last=r.at(-1), pick=i=>r[Math.max(0,r.length+i)];
     const T=(b,v,cl)=>`<div class="r"><b>${b}</b><span class="${cl||""}">${v}</span></div>`;
@@ -421,7 +424,7 @@ async function scan(){
 
 /* ---------- wiring ---------- */
 function render(){ renderPortfolio(); renderWatch(); renderMarket();
-  $("#foot").textContent=`Prices live from DexScreener every 30 s; hourly history from GeckoTerminal; holdings as of ${saved?.at?"your last scan":"the build ("+new Date(DATA.built*1000).toUTCString().slice(5,22)+" UTC)"}. * = held for less than that period (the coin’s move, not yours). Press Scan wallets after any buy or sell.`; }
+  $("#foot").textContent=`Prices live from DexScreener every 30 s; hourly history from GeckoTerminal; holdings as of ${saved?.at?"your last scan":"the build ("+fmtWhen(DATA.built)+")"}. * = held for less than that period (the coin’s move, not yours). Press Scan wallets after any buy or sell.`; }
 async function refresh(){
   await Promise.all([...holdings,...watch].map(async c=>{ try{ const p=await dexToken(c.chain,c.token); if(p){ prices[key(c)]=parseFloat(p.priceUsd); info[key(c)]=p; } }catch(e){} }));
   render();
@@ -430,7 +433,7 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{ document.quer
 $("#scan").onclick=scan;
 $("#arefresh").onclick=async()=>{ const b=$("#arefresh"), m=$("#asof"); b.disabled=true; b.textContent="Starting…"; m.classList.remove("asof-ok");
   try{ const r=await fetch("api/refresh",{method:"POST"}), j=await r.json();
-    if(r.ok){ b.textContent="Refresh started ✓"; m.textContent="Started at "+new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})+". It takes about 5 to 10 minutes; reload this page after that."; m.classList.add("asof-ok"); setTimeout(()=>{ b.disabled=false; b.textContent="Refresh analytics"; },120000); return; }
+    if(r.ok){ b.textContent="Refresh started ✓"; m.textContent="Started at "+new Date().toLocaleTimeString("en-GB", {timeZone:TZ,hour:"2-digit",minute:"2-digit"})+". It takes about 5 to 10 minutes; reload this page after that."; m.classList.add("asof-ok"); setTimeout(()=>{ b.disabled=false; b.textContent="Refresh analytics"; },120000); return; }
     m.textContent=j.error||"Could not start the refresh."; }
   catch(e){ m.textContent="Could not start the refresh."; }
   b.disabled=false; b.textContent="Refresh analytics"; };

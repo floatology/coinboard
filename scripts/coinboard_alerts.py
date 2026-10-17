@@ -10,7 +10,7 @@
              KV_REST_API_URL and KV_REST_API_READ_ONLY_TOKEN are set (copied from the Vercel project's Upstash database).
   liquidity  all of a coin's pools together losing 30% or more of their dollar liquidity within an hour, seen on two
              checks in a row (a rug warning); again after 6 hours or a further 30% drop.
-  summary    once a day at 08:00 (UTC+7): the portfolio and each coin over 24 hours, whale alerts, holder changes.
+  summary    once a day at 08:00 Bangkok time: the portfolio and each coin over 24 hours, whale alerts, holder changes.
   whales     selling: a wallet holding at least 0.5% of supply (NET 0.1%) whose sales minus buys over 24 hours reach a
              quarter of its holding, 0.25% of supply and $10,000. Buying: a wallet whose buys minus sales over 24 hours
              reach 0.5% of supply and $10,000. Moves between wallets don't count. One alert per wallet and side per day.
@@ -55,8 +55,8 @@ WHALE_BUY_SUPPLY = 0.005     # share of supply bought
 WHALE_USD = 10_000
 WHALE_QUIET = 24 * 3600
 
-SUMMARY_HOUR = 8             # the daily summary, local time ...
-TZ_HOURS = 7                 # ... in UTC+7
+SUMMARY_HOUR = 8             # the daily summary at 08:00 ...
+TZ_HOURS = 7                 # ... Bangkok time (UTC+7, no daylight saving), the time every alert shows
 EXPLORER = {"robinhood": "https://robinhoodchain.blockscout.com", "arc": "https://explorer.arc.io"}
 
 
@@ -73,6 +73,10 @@ def usd(x: float) -> str:
 
 def price(x: float) -> str:
     return f"${x:,.2f}" if x >= 100 else f"${x:.4g}" if x >= 0.0001 else f"${x:.3g}"
+
+
+def bkk(t: float) -> str:
+    return time.strftime("%H:%M", time.gmtime(t + TZ_HOURS * 3600)) + " Bangkok time"
 
 
 def esc(s: str) -> str:              # token names come from whoever made the token
@@ -213,7 +217,7 @@ def liquidity_alerts(coins: list[dict], pairs: dict, state: dict, now: float) ->
             continue
         mins = round((now - peak[0]) / 60)
         out.append((f"🚨 <b>{esc(c['name'])} liquidity down {1 - total / peak[1]:.0%} in {mins} minutes</b>\n\n"
-                    f"Its pools hold {usd(total)}, from {usd(peak[1])} at {time.strftime('%H:%M UTC', time.gmtime(peak[0]))}.\n"
+                    f"Its pools hold {usd(total)}, from {usd(peak[1])} at {bkk(peak[0])}.\n"
                     f"Price in the same time: {pct(px / peak[2] - 1)}.\n\n"
                     "A sudden drop like this can mean liquidity is being pulled (a rug), which makes the coin hard to sell.\n\n"
                     + chart(c, ps[0]["pairAddress"]),
@@ -334,7 +338,7 @@ def hourly(coins: list[dict], state: dict, now: float) -> list:
                 continue
             ex = EXPLORER.get(c["chain"], "")
             wallet = f"<a href=\"{ex}/address/{addr}\">The wallet</a> · " if ex else ""
-            when = time.strftime("%H:%M UTC", time.gmtime(last_trade))
+            when = bkk(last_trade)
             if side == "sell":
                 msg = (f"🐋 <b>Whale selling {esc(c['name'])}: {usd(u)} in 24 hours</b>\n\n"
                        f"A wallet that held {peak / sup:.2%} of the supply sold {min(q / peak, 1):.0%} of it "
