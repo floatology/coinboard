@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """Coin Board's Telegram alerts.
 
-    coinboard_alerts.py price    # every 5 minutes (the alerts workflow): a coin moving 10% or more in 6 hours
-    coinboard_alerts.py whales   # every hour, after the archive refresh: a whale selling a big part of its holding
+    coinboard_alerts.py tick     # every 5 minutes (the alerts workflow): price moves, liquidity pulls, the daily summary
+    coinboard_alerts.py hourly   # every hour, after the archive refresh: whales selling or buying
 
-The coins come from data/coinboard_held.json (written by the hourly build). What was already sent is kept in
-data/alerts_<check>.json, so one move or one whale is reported once, not on every run; an alert counts as sent only
-once Telegram has accepted it. The thresholds are the constants below. Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID;
-without them it only prints what it would send (and remembers nothing).
+  price      a held coin moving 10% or more over 6, 12 or 24 hours: one message per coin with all three changes. A window
+             alerts again only after its own length, or 10 points further the same way, or when the move turns.
+  liquidity  all of a coin's pools together losing 30% or more of their dollar liquidity within an hour, seen on two
+             checks in a row (a rug warning); again after 6 hours or a further 30% drop.
+  summary    once a day at 08:00 (UTC+7): the portfolio and each coin over 24 hours, whale alerts, holder changes.
+  whales     selling: a wallet holding at least 0.5% of supply (NET 0.1%) whose sales minus buys over 24 hours reach a
+             quarter of its holding, 0.25% of supply and $10,000. Buying: a wallet whose buys minus sales over 24 hours
+             reach 0.5% of supply and $10,000. Moves between wallets don't count. One alert per wallet and side per day.
+
+The holdings come from data/coinboard_held.json (written by the hourly build); data/coinboard_facts.json (the day's
+whale alerts and holder counts, for the summary) is written by the hourly check. Both reach the 5-minute check through
+a small cache. What was sent is kept in data/alerts_<check>.json; an alert counts as sent only once Telegram has it.
+Needs TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID; without them it prints what it would send and remembers no alerts.
 """
 from __future__ import annotations
 
@@ -25,25 +34,31 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import telegram_notify  # noqa: E402
 
 HELD = ROOT / "data/coinboard_held.json"
+FACTS = ROOT / "data/coinboard_facts.json"
 
-PRICE_MOVE = 0.10            # a coin's 6-hour change reaching +-10%
-PRICE_STEP = 0.10            # ... alerts again if it goes 10 points further the same way (+10% -> +20%)
-PRICE_QUIET = 6 * 3600       # ... and otherwise not again for 6 hours, unless it turns the other way
+PRICE_WINDOWS = (6, 12, 24)  # hours
+PRICE_MOVE = 0.10            # a change of +-10% over a window alerts
+PRICE_STEP = 0.10            # ... again 10 points further the same way (+10% -> +20%), or after the window's own length
 
-# A whale: a wallet holding at least WHALE_SIZE x the board's whale threshold (0.25% of supply, NET 0.05%), so 0.5%
-# (NET 0.1%). It alerts when its sales minus its buys over 24 hours reach WHALE_SOLD of its holding, are at least
-# WHALE_SUPPLY of the coin's supply and worth WHALE_USD. Moves between wallets do not count. Measured on the 30 days
-# to 16 Oct: about 11 alerts a week across WALLET, NET, FAZE and AF; most of those whales kept selling.
-WHALE_SIZE = 2
-WHALE_SOLD = 0.25
-WHALE_SUPPLY = 0.0025
+LIQ_DROP = 0.30              # all pools losing 30% of their dollar liquidity ...
+LIQ_WINDOW = 3600            # ... within an hour
+LIQ_QUIET = 6 * 3600
+
+# Whales, measured on the 30 days to 16 Oct: selling about 11 alerts a week across WALLET, NET, FAZE and AF (most of
+# those whales kept selling), buying about 11 a week.
+WHALE_SIZE = 2               # x the board's whale threshold (0.25% of supply, NET 0.05%)
+WHALE_SOLD = 0.25            # share of its holding
+WHALE_SUPPLY = 0.0025        # share of supply sold
+WHALE_BUY_SUPPLY = 0.005     # share of supply bought
 WHALE_USD = 10_000
-WHALE_QUIET = 24 * 3600      # one alert per whale per day
+WHALE_QUIET = 24 * 3600
 
+SUMMARY_HOUR = 8             # the daily summary, local time ...
+TZ_HOURS = 7                 # ... in UTC+7
 EXPLORER = {"robinhood": "https://robinhoodchain.blockscout.com", "arc": "https://explorer.arc.io"}
 
 
-# ---------- formatting (the page's conventions: a real minus sign, K / M, prices to 3-4 significant digits) ----------
+# ---------- formatting (the page's conventions: a real minus sign, K / M, prices to 4 significant digits) ----------
 def pct(x: float | None) -> str:
     return "n/a" if x is None else f"{'+' if x >= 0 else '−'}{abs(x) * 100:.1f}%"
 
@@ -62,6 +77,10 @@ def esc(s: str) -> str:              # token names come from whoever made the to
     return html.escape(str(s))[:40]
 
 
+def chart(c: dict, pair: str = "") -> str:
+    return f"<a href=\"https://dexscreener.com/{c['chain']}/{pair or c.get('pair') or c['token']}\">Open chart</a>"
+
+
 # ---------- shared ----------
 def load(path: Path, default):
     try:
@@ -76,64 +95,171 @@ def get_json(url: str):
         return json.loads(r.read())
 
 
-def main_pair(c: dict) -> dict | None:
-    """The coin's chart pair on DexScreener (the one the board shows), else its deepest pair with the coin as base."""
+def key(c: dict) -> str:
+    return f"{c['chain']}:{c['token'].lower()}"
+
+
+def dex_pairs(c: dict) -> list[dict]:
+    """The coin's pairs on its chain (DexScreener), the chart pair first, else the deepest with the coin as base."""
     ps = get_json(f"https://api.dexscreener.com/token-pairs/v1/{c['chain']}/{c['token']}")
-    ps = [p for p in (ps if isinstance(ps, list) else []) if p.get("chainId") == c["chain"]
-          and (p.get("baseToken") or {}).get("address", "").lower() == c["token"].lower() and p.get("liquidity")]
-    return next((p for p in ps if p["pairAddress"].lower() == (c.get("pair") or "").lower()), None) or \
-        max(ps, key=lambda p: p["liquidity"].get("usd") or 0, default=None)
+    ps = [p for p in (ps if isinstance(ps, list) else []) if p.get("chainId") == c["chain"] and p.get("liquidity")]
+    base = sorted((p for p in ps if (p.get("baseToken") or {}).get("address", "").lower() == c["token"].lower()),
+                  key=lambda p: -(p["liquidity"].get("usd") or 0))
+    main = next((p for p in base if p["pairAddress"].lower() == (c.get("pair") or "").lower()), base[0] if base else None)
+    return ([main] if main else []) + [p for p in ps if p is not main]
 
 
-def send(alerts: list[tuple[str, str, object]], seen: dict) -> None:
-    """Send each (message, key, memory) and remember it only once Telegram has it, so a failed send is tried again."""
-    for msg, k, mem in alerts:
+def send(alerts: list[tuple[str, dict, dict | None]], state: dict) -> None:
+    """Send each (message, memory, log entry); keep its memory only once Telegram has it, so a failed send is tried again."""
+    for msg, mem, log in alerts:
         print("alert:", msg.split("\n")[0])
         if not telegram_notify.configured():
             continue
         try:
             telegram_notify.send(msg)
-            seen[k] = mem
         except Exception as e:
             print(f"warning: Telegram did not take it ({e}); trying again next run")
+            continue
+        state.setdefault("sent", {}).update(mem)
+        if log:
+            state.setdefault("log", []).append(log)
 
 
-# ---------- price: a 10% move in 6 hours ----------
-def price_alerts(coins: list[dict], seen: dict, now: float) -> list[tuple[str, str, object]]:
-    out = []
+# ---------- price: 10% over 6, 12 or 24 hours ----------
+def changes(c: dict, p: dict, now: float) -> dict[int, float]:
+    pc, out = p.get("priceChange") or {}, {}
+    for h, f in ((6, "h6"), (24, "h24")):
+        if pc.get(f) is not None:
+            out[h] = float(pc[f]) / 100
+    # DexScreener has no 12-hour figure: the price 12 hours ago comes from the hourly history the build passes on
+    hist, ref = c.get("hist") or [], None
+    for ts, px in hist:
+        if ts <= now - 12 * 3600:
+            ref = px
+    if ref and hist[0][0] <= now - 12 * 3600 - 1800:
+        out[12] = float(p["priceUsd"]) / ref - 1
+    return dict(sorted(out.items()))
+
+
+def price_alerts(coins: list[dict], pairs: dict, state: dict, now: float) -> list:
+    out, sent = [], state.get("sent", {})
     for c in coins:
-        try:
-            p = main_pair(c)
-        except Exception as e:
-            print(f"warning: no DexScreener answer for {c['name']} ({e})")
+        ps = pairs.get(key(c))
+        if not ps:
             continue
-        ch = ((p or {}).get("priceChange") or {}).get("h6")
-        if ch is None or abs(float(ch)) / 100 < PRICE_MOVE:
+        p = ps[0]
+        chs = changes(c, p, now)
+        fired = []
+        for h, ch in chs.items():
+            last, d = sent.get(f"p:{key(c)}:{h}"), 1 if ch > 0 else -1
+            if abs(ch) < PRICE_MOVE or (last and now - last["t"] < h * 3600 and last["dir"] == d
+                                        and abs(ch) < abs(last["level"]) + PRICE_STEP):
+                continue
+            fired.append(h)
+        if not fired:
             continue
-        ch = float(ch) / 100
-        k, d = f"{c['chain']}:{c['token'].lower()}", 1 if ch > 0 else -1
-        last = seen.get(k)
-        if last and now - last["t"] < PRICE_QUIET and last["dir"] == d and abs(ch) < abs(last["level"]) + PRICE_STEP:
-            continue
-        px, pc, vol = float(p["priceUsd"]), p.get("priceChange") or {}, (p.get("volume") or {}).get("h6")
-        mc = p.get("fdv") or p.get("marketCap")
-        val = c.get("qty", 0) * px
-        hold = f"\nYour holding: {usd(val)} ({'+' if ch >= 0 else '−'}{usd(abs(val * ch / (1 + ch)))} in 6 hours)" if val >= 1 else ""
-        out.append((f"{'🟢' if ch > 0 else '🔴'} <b>{esc(c['name'])} {pct(ch)} in 6 hours</b>\n\n"
-                   f"Price <b>{price(px)}</b>" + (f" · Mcap <b>{usd(mc)}</b>" if mc else "") + "\n"
-                   f"1h {pct(pc.get('h1') / 100 if pc.get('h1') is not None else None)} · "
-                   f"24h {pct(pc.get('h24') / 100 if pc.get('h24') is not None else None)}"
-                   + (f" · 6h volume {usd(vol)}" if vol else "") + hold +
-                   f"\n\n<a href=\"https://dexscreener.com/{c['chain']}/{p['pairAddress']}\">Open chart</a>",
-                    k, {"t": now, "dir": d, "level": ch}))
+        h = max(fired, key=lambda w: abs(chs[w]))
+        ch, px, pc = chs[h], float(p["priceUsd"]), p.get("priceChange") or {}
+        mc, val = p.get("fdv") or p.get("marketCap"), c.get("qty", 0) * px
+        hold = f"\nYour holding: {usd(val)} ({'+' if ch >= 0 else '−'}{usd(abs(val * ch / (1 + ch)))} in {h} hours)" if val >= 1 else ""
+        out.append((f"{'🟢' if ch > 0 else '🔴'} <b>{esc(c['name'])} {pct(ch)} in {h} hours</b>\n\n"
+                    + " · ".join(f"{w}h {pct(x)}" for w, x in chs.items()) + "\n"
+                    f"Price <b>{price(px)}</b>" + (f" · Mcap <b>{usd(mc)}</b>" if mc else "")
+                    + (f" · 1h {pct(float(pc['h1']) / 100)}" if pc.get("h1") is not None else "") + hold
+                    + "\n\n" + chart(c, p["pairAddress"]),
+                    {f"p:{key(c)}:{w}": {"t": now, "dir": 1 if chs[w] > 0 else -1, "level": chs[w]} for w in fired}, None))
     return out
 
 
-# ---------- whales: a big holder selling a large part of its holding (hourly, from the archives just refreshed) ----------
-def whale_alerts(coins: list[dict], seen: dict, now: float) -> list[tuple[str, str, object]]:
+# ---------- liquidity: all pools losing 30% within an hour ----------
+def liquidity_alerts(coins: list[dict], pairs: dict, state: dict, now: float) -> list:
+    out, sent, hist = [], state.get("sent", {}), state.setdefault("liq", {})
+    for c in coins:
+        ps = pairs.get(key(c))
+        if not ps:
+            continue
+        total = sum(p["liquidity"].get("usd") or 0 for p in ps)
+        px = float(ps[0]["priceUsd"])
+        h = [s for s in hist.get(key(c), []) if now - s[0] < 2 * LIQ_WINDOW]
+        prev = h[-1] if h else None
+        h.append([now, total, px])
+        hist[key(c)] = h
+        # the highest level in the hour before (samples at least 10 minutes old), and the drop seen on two checks in a row
+        window = [s for s in h if now - LIQ_WINDOW - 300 <= s[0] <= now - 600]
+        if not window or not prev or now - prev[0] > 15 * 60:
+            continue
+        peak = max(window, key=lambda s: s[1])
+        if peak[1] < 1000 or 1 - total / peak[1] < LIQ_DROP or 1 - prev[1] / peak[1] < LIQ_DROP * 0.8:
+            continue
+        last = sent.get(f"l:{key(c)}")
+        if last and now - last["t"] < LIQ_QUIET and total > last["level"] * (1 - LIQ_DROP):
+            continue
+        mins = round((now - peak[0]) / 60)
+        out.append((f"🚨 <b>{esc(c['name'])} liquidity down {1 - total / peak[1]:.0%} in {mins} minutes</b>\n\n"
+                    f"Its pools hold {usd(total)}, from {usd(peak[1])} at {time.strftime('%H:%M UTC', time.gmtime(peak[0]))}.\n"
+                    f"Price in the same time: {pct(px / peak[2] - 1)}.\n\n"
+                    "A sudden drop like this can mean liquidity is being pulled (a rug), which makes the coin hard to sell.\n\n"
+                    + chart(c, ps[0]["pairAddress"]),
+                    {f"l:{key(c)}": {"t": now, "level": total}}, None))
+    return out
+
+
+# ---------- the daily summary ----------
+def summary(coins: list[dict], pairs: dict, state: dict, now: float) -> list:
+    local = now + TZ_HOURS * 3600
+    day = time.strftime("%Y-%m-%d", time.gmtime(local))
+    if time.gmtime(local).tm_hour < SUMMARY_HOUR or state.get("sent", {}).get("summary", {}).get("day") == day:
+        return []
+    rows, total, before = [], 0.0, 0.0
+    for c in coins:
+        ps = pairs.get(key(c))
+        if not ps:
+            continue
+        px, h24 = float(ps[0]["priceUsd"]), (ps[0].get("priceChange") or {}).get("h24")
+        v = c.get("qty", 0) * px
+        ch = float(h24) / 100 if h24 is not None else None
+        total += v
+        before += v / (1 + ch) if ch is not None else v
+        rows.append((c["name"], v, ch))
+    if not rows:
+        return []
+    rows.sort(key=lambda r: -r[1])
+    w = max(len(r[0][:10]) for r in rows)
+    table = "\n".join(f"{esc(n[:10]).ljust(w)} {usd(v):>8}  {pct(ch):>7}" for n, v, ch in rows)
+    facts = load(FACTS, {})
+    wl = [x for x in facts.get("whales", []) if now - x["t"] < 86400]
+    def whales(side: str) -> str:
+        xs = [x for x in wl if x["side"] == side]
+        named = ", ".join(esc(x["coin"]) + " " + usd(x["usd"]) for x in xs[:4])
+        return f"{len(xs)} {side}{'s' if len(xs) != 1 else ''}" + (f" ({named})" if xs else "")
+    hold = facts.get("holders", {})
+    holders = " · ".join(f"{esc(n)} {'+' if v[0] >= v[1] else '−'}{abs(v[0] - v[1]):,}" for n, v in hold.items() if len(v) == 2)
+    move = max(rows, key=lambda r: abs(r[2] or 0))
+    return [(f"☀️ <b>Daily summary</b> · {time.strftime('%a %d %b', time.gmtime(local))}\n\n"
+             f"Portfolio <b>{usd(total)}</b>  {pct(total / before - 1 if before else None)} "
+             f"({'+' if total >= before else '−'}{usd(abs(total - before))}) in 24h\n"
+             f"<pre>{table}</pre>\n"
+             f"Biggest move: {esc(move[0])} {pct(move[2])}\n"
+             f"Whale alerts, 24h: {whales('sell')} · {whales('buy')}"
+             + (f"\nHolders, 24h: {holders}" if holders else ""),
+             {"summary": {"t": now, "day": day}}, None)]
+
+
+def tick(coins: list[dict], state: dict, now: float) -> list:
+    pairs = {}
+    for c in coins:
+        try:
+            pairs[key(c)] = dex_pairs(c)
+        except Exception as e:
+            print(f"warning: no DexScreener answer for {c['name']} ({e})")
+    return price_alerts(coins, pairs, state, now) + liquidity_alerts(coins, pairs, state, now) + summary(coins, pairs, state, now)
+
+
+# ---------- whales: selling or buying a lot within a day (hourly, from the archives just refreshed) ----------
+def hourly(coins: list[dict], state: dict, now: float) -> list:
     import duckdb
     import dashboard_analytics as an           # the board's own whale threshold and list of pools / protocol addresses
-    out, con = [], duckdb.connect()
+    out, con, sent = [], duckdb.connect(), state.get("sent", {})
     for c in coins:
         cfg = an.coin_config(c)
         d = ROOT / cfg["dir"]
@@ -148,62 +274,80 @@ def whale_alerts(coins: list[dict], seen: dict, now: float) -> list[tuple[str, s
         if not sup or not last_ts or now - last_ts > 6 * 3600:     # no supply, or the archive is stale: say nothing
             continue
         t0 = last_ts - 86400
-        # wallets whose sales minus buys over the last 24 hours are big enough to matter
+        # wallets whose sales minus buys (or buys minus sales) over the last 24 hours are big enough to matter
         cands = con.execute(f"""select lower(trader), sum(case when side = 'sell' then tokens else -tokens end) q,
-                                       sum(case when side = 'sell' then usd else -usd end) u, max(case when side = 'sell' then ts end) last_sell
+                                       sum(case when side = 'sell' then usd else -usd end) u, max(ts) last_trade
                                   from {L} where ts > {t0} group by 1
-                                 having q >= {WHALE_SUPPLY * sup} and u >= {WHALE_USD}""").fetchall()
+                                 having (q >= {WHALE_SUPPLY * sup} and u >= {WHALE_USD})
+                                     or (q <= {-WHALE_BUY_SUPPLY * sup} and u <= {-WHALE_USD})""").fetchall()
         whale = WHALE_SIZE * cfg["th"][0] / 100 * sup
-        for addr, q, u, last_sell in cands:
-            k = f"{c['chain']}:{c['token'].lower()}:{addr}"
-            if addr in excl or now - seen.get(k, -1e18) < WHALE_QUIET:
+        b0 = con.execute(f"select min(block) from {L} where ts > {t0}").fetchone()[0]
+        for addr, q, u, last_trade in cands:
+            side = "sell" if q > 0 else "buy"
+            k = f"w:{key(c)}:{addr}:{side}"
+            if addr in excl or now - sent.get(k, {}).get("t", -1e18) < WHALE_QUIET:
                 continue
             # its holding over the window: the balance when the window opened, then every transfer since (peak = most held)
-            b0 = con.execute(f"""select min(block) from {L} where ts > {t0}""").fetchone()[0]
-            start = con.execute(f"""select coalesce(sum(case when lower(dst) = '{addr}' then cast(value as hugeint) else 0 end)
-                                              - sum(case when lower(src) = '{addr}' then cast(value as hugeint) else 0 end), 0) / 1e{dec}
-                                      from {T} where block < {b0} and (lower(src) = '{addr}' or lower(dst) = '{addr}')""").fetchone()[0]
-            bal = peak = float(start)
+            start = float(con.execute(f"""select coalesce(sum(case when lower(dst) = '{addr}' then cast(value as hugeint) else 0 end)
+                                                    - sum(case when lower(src) = '{addr}' then cast(value as hugeint) else 0 end), 0) / 1e{dec}
+                                            from {T} where block < {b0} and (lower(src) = '{addr}' or lower(dst) = '{addr}')""").fetchone()[0])
+            bal = peak = start
             for src, v in con.execute(f"""select lower(src), cast(value as hugeint) / 1e{dec} from {T}
                                            where block >= {b0} and (lower(src) = '{addr}' or lower(dst) = '{addr}') order by block, log_index""").fetchall():
                 bal += -float(v) if src == addr else float(v)
                 peak = max(peak, bal)
-            if peak < whale or q < WHALE_SOLD * peak:
+            if side == "sell" and (peak < whale or q < WHALE_SOLD * peak):
                 continue
             ex = EXPLORER.get(c["chain"], "")
-            out.append((f"🐋 <b>Whale selling {esc(c['name'])}: {usd(u)} in 24 hours</b>\n\n"
-                        f"A wallet that held {peak / sup:.2%} of the supply sold {min(q / peak, 1):.0%} of it "
-                        f"({q / sup:.2%} of the supply), net of any buys.\n"
-                        f"It now holds {max(bal, 0) / sup:.2%}. Last sale {time.strftime('%H:%M UTC', time.gmtime(last_sell))}.\n\n"
-                        + (f"<a href=\"{ex}/address/{addr}\">The wallet</a> · " if ex else "")
-                        + f"<a href=\"https://dexscreener.com/{c['chain']}/{c.get('pair') or c['token']}\">Open chart</a>",
-                        k, now))
+            wallet = f"<a href=\"{ex}/address/{addr}\">The wallet</a> · " if ex else ""
+            when = time.strftime("%H:%M UTC", time.gmtime(last_trade))
+            if side == "sell":
+                msg = (f"🐋 <b>Whale selling {esc(c['name'])}: {usd(u)} in 24 hours</b>\n\n"
+                       f"A wallet that held {peak / sup:.2%} of the supply sold {min(q / peak, 1):.0%} of it "
+                       f"({q / sup:.2%} of the supply), net of any buys.\nIt now holds {max(bal, 0) / sup:.2%}. Last sale {when}.\n\n")
+            else:
+                msg = (f"🐳 <b>Whale buying {esc(c['name'])}: {usd(-u)} in 24 hours</b>\n\n"
+                       f"A wallet bought {-q / sup:.2%} of the supply, net of any sales.\n"
+                       f"It now holds {max(bal, 0) / sup:.2%} (it held {max(start, 0) / sup:.2%} a day ago). Last buy {when}.\n\n")
+            out.append((msg + wallet + chart(c), {k: {"t": now}}, {"t": now, "coin": c["name"], "side": side, "usd": abs(u)}))
     return out
+
+
+def facts(state: dict, now: float) -> None:
+    """For the daily summary (made by the 5-minute check): the last day's whale alerts and each coin's holder count."""
+    an = load(ROOT / "dashboard/site/analytics.json", {}).get("coins", {})
+    holders = {n: [x["rows"][-1]["holders"], x["rows"][-2]["holders"]] for n, x in an.items() if len(x.get("rows", [])) >= 2}
+    FACTS.write_text(json.dumps({"t": now, "whales": [x for x in state.get("log", []) if now - x["t"] < 86400], "holders": holders}))
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("check", choices=["price", "whales"])
+    ap.add_argument("check", choices=["tick", "hourly"])
     a = ap.parse_args()
     coins = load(HELD, [])
-    if not coins:
-        print("no holdings list yet (data/coinboard_held.json comes from the hourly update)")
-        return 0
     path, now = ROOT / f"data/alerts_{a.check}.json", time.time()
-    seen = load(path, {})
-    before = json.dumps(seen, sort_keys=True)
-    try:
-        alerts = price_alerts(coins, seen, now) if a.check == "price" else whale_alerts(coins, seen, now)
-        print(f"{a.check}: {len(coins)} coins checked, {len(alerts)} alert(s)")
-        send(alerts, seen)
-    except Exception as e:                       # an alert hiccup must never fail the run (or the hourly update)
-        print(f"warning: {a.check} alerts failed ({e})")
-    if a.check == "whales":                      # forget whales after a week
-        seen = {k: t for k, t in seen.items() if now - t < 7 * 86400}
-    changed = json.dumps(seen, sort_keys=True) != before
+    state = load(path, {})
+    before = json.dumps(state, sort_keys=True)
+    if coins:
+        try:
+            alerts = tick(coins, state, now) if a.check == "tick" else hourly(coins, state, now)
+            print(f"{a.check}: {len(coins)} coins checked, {len(alerts)} alert(s)")
+            send(alerts, state)
+        except Exception as e:                   # an alert hiccup must never fail the run (or the hourly update)
+            print(f"warning: {a.check} alerts failed ({e})")
+    else:
+        print("no holdings list yet (data/coinboard_held.json comes from the hourly update)")
+    state["sent"] = {k: m for k, m in state.get("sent", {}).items() if now - m.get("t", 0) < 7 * 86400}
+    state["log"] = [x for x in state.get("log", []) if now - x["t"] < 2 * 86400]
+    if a.check == "hourly":
+        try:
+            facts(state, now)
+        except Exception as e:
+            print(f"warning: no facts for the daily summary ({e})")
+    changed = json.dumps(state, sort_keys=True) != before
     if changed:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(seen))
+        path.write_text(json.dumps(state))
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as f:
             f.write(f"changed={int(changed)}\n")

@@ -130,8 +130,8 @@ def main() -> int:
         return 1
     if not a.no_deploy:
         subprocess.run([PY, "scripts/dashboard_deploy.py"], cwd=ROOT, check=True)
-    # whale alerts, from the archives just refreshed (after the deploy, and never able to fail the run)
-    subprocess.run([PY, "scripts/coinboard_alerts.py", "whales"], cwd=ROOT)
+    # whale alerts and the daily summary's facts, from the archives just refreshed (after the deploy; never fails the run)
+    subprocess.run([PY, "scripts/coinboard_alerts.py", "hourly"], cwd=ROOT)
     print(f"done in {time.time() - t0:.0f}s")
     return 0
 

@@ -316,9 +316,11 @@ def main() -> int:
     vhist = value_history(coins, cfg, now)
     try:
         (ROOT / "data/coinboard_shown.json").write_text(json.dumps([{"name": c["name"], "chain": c["chain"], "token": c["token"], "dec": c.get("dec", 18)} for c in coins]))
-        # for the alerts (the 5-minute check gets it through its own small cache): what is held, its chart pair and quantity
+        # for the alerts (the 5-minute check gets it through its own small cache): what is held, its chart pair, quantity,
+        # and the last 26 hourly prices (DexScreener has no 12-hour change)
         (ROOT / "data/coinboard_held.json").write_text(json.dumps([{"name": c["name"], "chain": c["chain"], "token": c["token"], "dec": c.get("dec", 18),
-                                                                    "pair": c.get("pair", ""), "qty": c["qty"]} for c in coins]))
+                                                                    "pair": c.get("pair", ""), "qty": c["qty"], "hist": (c.get("hist") or [])[-27:]}
+                                                                   for c in coins]))
     except Exception as e:
         print(f"warning: could not save the shown holdings ({e})")
     for f in ("scan.js", "refresh.js", "watch.js"):
