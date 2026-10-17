@@ -170,9 +170,9 @@ def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, c
             if h.get("corrected"):                   # the replay missed transfers of this token
                 was = h["corrected"]
                 msg = f"{h['chain']}: {h.get('symbol', '?')} chain {h.get('qty', 0):,.6g} vs replay {was.get('qty', 0):,.6g}"
-                money = (h["chain"], h["token"].lower()) in held or was.get("cost", 0) > 0 or h.get("soldQty", 0) > 0
+                money = (h["chain"], h["token"].lower()) in held or was.get("paid", was.get("cost", 0) > 0) or h.get("soldQty", 0) > 0
                 (fixed if money else dust).append(msg)
-        if dust:                                     # free tokens nobody paid for (airdrops): no cost to get wrong
+        if dust:                                     # tokens nobody paid for here (airdrops, transfers in): costed at market
             print("replay: corrected free tokens (" + "; ".join(dust) + ")")
         if fixed:                                    # a coin with money in it: do not trust the replay's costs
             print("warning: replay needed balance corrections (" + "; ".join(fixed) + ")")

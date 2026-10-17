@@ -52,13 +52,40 @@ async function sym(url, token) {
 async function balanceOf(url, token, w) { try { const r = await rpc(url, "eth_call", [{ to: token, data: "0x70a08231" + pad(w).slice(2) }, "latest"], 5); return r && r.length > 2 ? BigInt(r) : null; } catch { return null; } }
 async function balanceAll(url, token, wallets) { let tot = 0n; for (const w of wallets) { const b = await balanceOf(url, token, w); if (b == null) return null; tot += b; } return tot; }
 
+// price of a token at a past block, for tokens that arrive with no payment seen (bought on another chain, sent from another
+// wallet, airdropped): GeckoTerminal's hourly candle for the token's most liquid pool (found through DexScreener), else
+// DexScreener's current price; null when the token has no market
+const getJSON = async u => { const r = await fetch(u, { signal: AbortSignal.timeout(8000) }); if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); };
+async function priceAt(key, url, token, block) {
+  let pair, now = null;
+  try {
+    const j = await getJSON(`https://api.dexscreener.com/latest/dex/tokens/${token}`);
+    const p = (j.pairs || []).filter(p => p.chainId === key && lc(p.baseToken && p.baseToken.address) === token && p.liquidity)
+      .sort((a, b) => b.liquidity.usd - a.liquidity.usd)[0];
+    if (p) { pair = p.pairAddress; now = parseFloat(p.priceUsd) || null; }
+  } catch {}
+  if (!pair) return null;
+  try {
+    const ts = hex((await rpc(url, "eth_getBlockByNumber", ["0x" + block.toString(16), false], 3)).timestamp);
+    for (let i = 0; i < 2; i++) {
+      try {
+        const j = await getJSON(`https://api.geckoterminal.com/api/v2/networks/${key}/pools/${pair}/ohlcv/hour?aggregate=1&before_timestamp=${ts + 3600}&limit=6&currency=usd&token=${token}`);
+        const c = ((j.data && j.data.attributes.ohlcv_list) || []).filter(c => c[0] <= ts).sort((a, b) => b[0] - a[0])[0];
+        if (c && ts - c[0] < 6 * 3600) return { px: (c[1] + c[4]) / 2, how: "the market price at the time" };
+        break;
+      } catch { await new Promise(r => setTimeout(r, 3000)); }   // usually GeckoTerminal's rate limit
+    }
+  } catch {}
+  return now ? { px: now, how: "today's market price" } : null;
+}
+
 async function scanChain(key, ch, notes) {
   const url = ch.rpc, wallets = ch.wallets.map(lc), wset = new Set(wallets);
   const stables = {}; for (const s of ch.stables) stables[lc(s.address)] = s;
   const head = hex(await rpc(url, "eth_blockNumber", []));
   const from = ch.baseBlock + 1;
   const hold = {};   // token -> {qty, cost, soldQty, soldProceeds, realised}
-  for (const h of ch.baseline) hold[lc(h.token)] = { name: h.name, chain: key, token: lc(h.token), qty: h.qty, cost: h.cost, soldQty: h.soldQty || 0, soldProceeds: h.soldProceeds || 0, realised: h.realised || 0, dec: h.dec || 18, symbol: h.name };
+  for (const h of ch.baseline) hold[lc(h.token)] = { name: h.name, chain: key, token: lc(h.token), qty: h.qty, cost: h.cost, soldQty: h.soldQty || 0, soldProceeds: h.soldProceeds || 0, realised: h.realised || 0, dec: h.dec || 18, symbol: h.name, paid: h.paid ?? h.cost > 0 };
   let txs = [];
   if (head >= from) {
     const flt = [];
@@ -109,9 +136,14 @@ async function scanChain(key, ch, notes) {
       for (const [t, q] of buys) {
         const h = hold[t] ||= { name: t.slice(0, 8), chain: key, token: t, qty: 0, cost: 0, soldQty: 0, soldProceeds: 0, realised: 0, dec: decs[t] || 18 };
         const share = q / buys.reduce((a, [, x]) => a + x, 0);
-        const cost = sells.length ? carried * share : (stableWallet < -0.01 || stableMax || wethMax) ? value * share : 0;
+        let cost = sells.length ? carried * share : (stableWallet < -0.01 || stableMax || wethMax) ? value * share : 0;
+        if (sells.length || cost) h.paid = true;
+        else {                                       // no payment seen: cost it at the market price, as if bought then
+          const m = await priceAt(key, url, t, hex(rc.blockNumber));
+          if (m) { cost = q * m.px; note(t, `arrived with no payment seen; cost set at ${m.how} ($${m.px.toPrecision(4)} each):`); }
+          else note(t, "received free (no market price):");
+        }
         h.qty += q; h.cost += cost;
-        if (!sells.length && !cost) note(t, "received free");
       }
     }
   }
@@ -130,7 +162,7 @@ async function scanChain(key, ch, notes) {
       if (again == null || Math.abs(Number(again) / 10 ** h.dec - oc) > tol(oc)) { notes.push(`${key}: ${h.symbol} balance reads disagree; kept the replay`); return; }
       // fewer on chain: tokens left unseen, cost reduced at the average; more on chain: arrived unseen, price unknown, cost unchanged
       notes.push(`${key}: ${h.symbol} balance on chain ${oc.toPrecision(8)} differs from the replay ${h.qty.toPrecision(8)}; using the chain` + (oc > h.qty ? " (extra tokens counted at no cost)" : ""));
-      h.corrected = { qty: h.qty, cost: h.cost };   // what the replay had, for callers deciding whether to trust it
+      h.corrected = { qty: h.qty, cost: h.cost, paid: !!h.paid };   // what the replay had, for callers deciding whether to trust it
       if (oc < h.qty && h.qty > 0) h.cost *= oc / h.qty;
       h.qty = oc;
     }

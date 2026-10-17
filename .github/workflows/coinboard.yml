@@ -21,8 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Install
@@ -31,7 +31,7 @@ jobs:
           .venv/bin/pip install -q httpx pydantic duckdb pyarrow python-dotenv numpy
       - name: Restore archives
         id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: data
           key: coinboard-data-${{ github.run_id }}
@@ -63,7 +63,7 @@ jobs:
           .venv/bin/python scripts/coinboard_ci.py --positions /tmp/positions.json
       - name: Save archives
         if: success() && steps.main.outputs.skipped != '1'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: data
           key: coinboard-data-${{ github.run_id }}

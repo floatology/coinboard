@@ -10,7 +10,7 @@ scanAll(cfg).then(r => {
     ch.baseBlock = r.heads[k];
     ch.baseline = [...r.holdings, ...r.closed].filter(h => h.chain === k).map(h => ({
       name: h.symbol || h.name, token: h.token, qty: h.qty, cost: h.cost, dec: h.dec,
-      soldQty: h.soldQty, soldProceeds: h.soldProceeds, realised: h.realised }));
+      soldQty: h.soldQty, soldProceeds: h.soldProceeds, realised: h.realised, paid: !!h.paid }));
   }
   fs.writeFileSync(file, JSON.stringify(cfg));
   process.stdout.write(JSON.stringify(r));

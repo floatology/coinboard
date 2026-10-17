@@ -5,7 +5,7 @@ The bot token and the chat to write to come from TELEGRAM_BOT_TOKEN and TELEGRAM
 Nothing here prints them: the logs of a public repo are public.
 
     python scripts/telegram_notify.py --test     # a test message plus the bot's profile picture (dashboard/telegram_avatar.png)
-    python scripts/telegram_notify.py --sample   # three made-up alerts, to show what real ones look like
+    python scripts/telegram_notify.py --sample [N ...]   # made-up alerts (all, or numbers 1-4), to show the layout
 """
 from __future__ import annotations
 
@@ -46,6 +46,14 @@ AF        $701   +0.4%
 NET       $491   +3.0%</pre>
 Whales: 2 buys, 1 sell over $2K
 Holders: WALLET +34 · FAZE +12 · AF −3 · NET +51""",
+    """📊 <b>AF volume spike: $42.6K in 1 hour</b>  <i>sample</i>
+
+5.1× its usual hourly volume
+Buys $31.2K · Sells $11.4K (73% buys)
+Biggest buy: $6,800 by <code>0x51c2…9a07</code> (new wallet)
+Price <b>$0.00184</b> (+9.6% 1h) · Mcap <b>$1.84M</b>
+
+<a href="https://dexscreener.com/arc/0x75d658f8101fbe6dc217fbba7e20a0312af5fa2e">Open chart</a>""",
 ]
 HINTS = {401: "the bot token is wrong (TELEGRAM_BOT_TOKEN): copy it again from @BotFather",
          400: "check TELEGRAM_CHAT_ID, and that you pressed Start in the chat with your bot",
@@ -96,20 +104,21 @@ def send_photo(path: Path, caption: str = "") -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--test", action="store_true", help="send a test message and the bot's profile picture")
-    ap.add_argument("--sample", action="store_true", help="send three made-up alerts")
+    ap.add_argument("--sample", nargs="*", type=int, metavar="N", help="send made-up alerts: all, or these numbers (1-%d)" % len(SAMPLES))
     a = ap.parse_args()
     missing = [k for k in ("TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID") if not os.environ.get(k, "").strip()]
     if missing:
         print("missing secret(s): " + ", ".join(missing) + " (repo Settings > Secrets and variables > Actions)")
         return 1
-    if not (a.test or a.sample):
+    if not a.test and a.sample is None:
         ap.print_help()
         return 0
     try:
-        if a.sample:
-            for m in SAMPLES:
+        if a.sample is not None:
+            picked = [SAMPLES[n - 1] for n in a.sample if 1 <= n <= len(SAMPLES)] if a.sample else SAMPLES
+            for m in picked:
                 send(m)
-            print(f"{len(SAMPLES)} sample alerts sent")
+            print(f"{len(picked)} sample alert(s) sent")
             return 0
         me = _call("getMe", {})["result"]
         print(f"bot: @{me.get('username')}")
