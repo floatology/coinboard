@@ -85,12 +85,13 @@ h1.logo img{height:62px}@media(max-width:520px){h1.logo img{height:36px}}
 .glance .gr span{text-align:right;font-weight:600}.glance .gh span{cursor:pointer;padding:4px 0;-webkit-tap-highlight-color:transparent}.glance .gh span.on{color:var(--accent)!important;font-weight:700!important}.glance .gr span.sel{background:rgba(45,226,230,.07);border-radius:4px;padding-right:3px}.glance .gr b{cursor:pointer;text-align:left;font:700 12px var(--display);color:var(--head)}.glance .gh span,.glance .gh b{font-weight:500;color:var(--muted)}}
 @media(max-width:360px){.tiles .r{padding:8px 8px}.tiles .r span{font-size:14px}}
 @media(max-width:360px){.glance{padding:6px 8px}.glance .gr{grid-template-columns:1.1fr 40px repeat(4,1fr);gap:3px;font-size:11px}.glance .gr b{font-size:11px}}
-.hero .vchart{position:absolute;z-index:2;left:50%;transform:translateX(-50%);bottom:8px;width:210px;height:42px;background:rgba(13,2,33,.7);border-radius:8px;padding:3px 6px;display:none}
+.hero .vchart{position:absolute;z-index:2;left:50%;transform:translateX(-50%);bottom:8px;width:210px;height:42px;background:rgba(13,2,33,.7);border-radius:8px;padding:3px 6px;display:none;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.hero .vchart .vr{position:absolute;left:5px;top:2px;font:700 9px/1 var(--ui);letter-spacing:.04em;color:var(--muted);text-shadow:0 0 3px #0d0221,0 0 3px #0d0221;pointer-events:none}.hero .vchart .vr.inf{font-size:13px;top:0}
 @media(max-width:520px){.hero .vchart{width:150px;height:36px;bottom:6px}}
 </style>
 </head>
 <body>
-<div class="hero"><div class="horizon"><div class="palms"></div></div><div class="total" id="total"></div><div class="vchart" id="vchart"></div>
+<div class="hero"><div class="horizon"><div class="palms"></div></div><div class="total" id="total"></div><div class="vchart" id="vchart" role="button"></div>
 <header>
   <h1 class="logo"><img src="__LOGO__" alt="Avava Labs"></h1>
   <div class="actions"><button id="scan">Scan wallets</button></div>
@@ -188,7 +189,34 @@ function geckoHist(c){   // hourly closes, 200 candles; queued 2.2 s apart (free
   });
   return geckoQ;
 }
-function refPrice(c,h){ const H=hist[key(c)]; if(!H||!H.length) return null; const t=Date.now()/1000-h*3600; if(H[0][0]>t+3600*2 && h>1) return null; let v=H[0][1]; for(const [ts,pr] of H){ if(ts<=t) v=pr; else break; } return v; }
+// recent 1-minute closes (GeckoTerminal: 1000 candles, about 16 hours on a busy pool) for the glance strip's price lines
+// and the 12h change; kept 4 minutes, refreshed every 5, through the same queue as geckoHist. An older copy (under 2 hours)
+// is shown until the refresh arrives, so a refused call (GeckoTerminal's rate limit) leaves the lines as they were
+const mins={};
+function geckoMinutes(c){
+  const k=key(c), cached=store.get("gm:"+k,null), age=cached?Date.now()-cached.t:Infinity;
+  if(age<7200000) mins[k]=cached.m;
+  if(age<240000) return Promise.resolve();
+  if(!c.pair) return Promise.resolve();
+  geckoQ = geckoQ.then(async()=>{
+    try{
+      const net=GECKO[c.chain]||c.chain;
+      const r=await fetch(`https://api.geckoterminal.com/api/v2/networks/${net}/pools/${c.pair}/ohlcv/minute?aggregate=1&limit=1000&currency=usd&token=${c.token}`,{signal:AbortSignal.timeout(15000)}); const j=await r.json();
+      const l=j.data.attributes.ohlcv_list; if(l&&l.length){ mins[k]=l.map(x=>[x[0],x[4]]).sort((a,b)=>a[0]-b[0]); store.set("gm:"+k,{t:Date.now(),m:mins[k]}); renderGlance(); }
+    }catch(e){}
+    await new Promise(r=>setTimeout(r,2200));
+  });
+  return geckoQ;
+}
+// every known price of a coin, oldest first: the hourly history, 1-minute closes where they reach, the live price last
+function allPts(c){ const k=key(c), M=mins[k]||[], m0=M.length?M[0][0]:Infinity, p=prices[k]??c.px;
+  const a=[...(hist[k]||[]).filter(x=>x[0]<m0),...M]; if(p) a.push([Date.now()/1000,p]); return a; }
+// the points of the last h hours, starting with the value carried in at the window's start
+function lastHours(a,h){ const t0=Date.now()/1000-h*3600; let start=null; const pts=[];
+  for(const x of a){ if(x[0]<t0) start=x[1]; else pts.push(x); } if(start!=null) pts.unshift([t0,start]); return pts; }
+function refPrice(c,h){ const t=Date.now()/1000-h*3600, M=mins[key(c)];
+  if(M&&M.length&&M[0][0]<=t){ let v=M[0][1]; for(const [ts,pr] of M){ if(ts<=t) v=pr; else break; } return v; }
+  const H=hist[key(c)]; if(!H||!H.length) return null; if(H[0][0]>t+3600*2 && h>1) return null; let v=H[0][1]; for(const [ts,pr] of H){ if(ts<=t) v=pr; else break; } return v; }
 function periodReturn(c,h,p){ const pc=info[key(c)]?.priceChange, f={1:"h1",6:"h6",24:"h24"}[h];
   if(pc&&f&&pc[f]!=null&&isFinite(pc[f])) return pc[f]/100;
   const ref=refPrice(c,h); return ref&&p?p/ref-1:null; }
@@ -212,26 +240,38 @@ function buildPortfolio(){
     grid.appendChild(el);
   });
 }
-// 24-hour price line for the glance strip: the hourly history baked in at build plus the live price
-function spark(c){ const H=hist[key(c)]||[], now=Date.now()/1000, p=prices[key(c)]??c.px;
-  const pts=H.filter(x=>x[0]>=now-24*3600).map(x=>x[1]); if(p) pts.push(p); if(pts.length<2) return "<i></i>";
-  const lo=Math.min(...pts), hi=Math.max(...pts), W=60, Hh=18, X=i=>(i/(pts.length-1)*W).toFixed(1), Y=v=>(hi===lo?Hh/2:1.5+(1-(v-lo)/(hi-lo))*(Hh-3)).toFixed(1);
-  const col=pts.at(-1)>=pts[0]?"#4ae8b0":"#ff4d5e";
-  return `<i style="display:flex;align-items:center"><svg width="100%" height="${Hh}" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" aria-hidden="true" style="display:block;overflow:visible"><path d="${pts.map((v,i)=>(i?"L":"M")+X(i)+" "+Y(v)).join("")}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg></i>`; }
-// portfolio value over time (recorded by the hourly build) with the live value as the last point, in the banner
-function renderValue(V){ const el=$("#vchart"); if(!el) return; const pts=(DATA.vhist||[]).slice(); if(V>0) pts.push([Date.now()/1000,V]);
-  if(pts.length<3){ el.style.display="none"; return; } el.style.display="block";
+// price line for the glance strip over the period it is sorted by (h hours), coloured like that period's change r
+function spark(c,h,r){ const a=allPts(c), win=Math.min(h*600,900); let j=0;
+  // each point is the middle of the highest and lowest price in the minutes before it (10 on the 1h line, else 15): on pools
+  // with a big fee (WALLET's 1%) buys and sells print about 2% apart, and the raw prices zig-zag between the two
+  const sm=a.map((x,i)=>{ while(a[j][0]<x[0]-win) j++; let lo=Infinity,hi=-Infinity; for(let k=j;k<=i;k++){ lo=Math.min(lo,a[k][1]); hi=Math.max(hi,a[k][1]); } return [x[0],(lo+hi)/2]; });
+  const all=lastHours(sm,h); if(all.length<2) return "<i></i>";
+  const step=Math.ceil(all.length/120), pts=all.filter((_,i)=>i%step===0||i===all.length-1);
+  const ys=pts.map(x=>x[1]), t0=pts[0][0], t1=pts.at(-1)[0], W=60, Hh=18;
+  const mid=(Math.min(...ys)+Math.max(...ys))/2, span=Math.max(Math.max(...ys)-Math.min(...ys),mid*0.03), lo=mid-span/2;   // at least 3% tall: a quiet hour stays flat
+  const X=t=>((t-t0)/(t1-t0||1)*W).toFixed(1), Y=v=>(span?1.5+(1-(v-lo)/span)*(Hh-3):Hh/2).toFixed(1);
+  const col=(r!=null?r>=0:ys.at(-1)>=ys[0])?"#4ae8b0":"#ff4d5e";
+  return `<i style="display:flex;align-items:center"><svg width="100%" height="${Hh}" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" aria-hidden="true" style="display:block;overflow:visible"><path d="${pts.map((x,i)=>(i?"L":"M")+X(x[0])+" "+Y(x[1])).join("")}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/></svg></i>`; }
+// portfolio value over time (recorded by the hourly build) with the live value as the last point, in the banner.
+// Tap it to cycle all time (∞) / 30 days / 7 days / 1 day; the timeframe shows in its top left corner
+const VR=[["∞",Infinity],["30D",30],["7D",7],["1D",1]]; let vrange=Math.min(+store.get("vrange",0)||0,VR.length-1), vLast=0;
+function renderValue(V){ const el=$("#vchart"); if(!el) return; vLast=V; const now=Date.now()/1000, from=now-VR[vrange][1]*86400, all=DATA.vhist||[];
+  const pts=all.filter(p=>p[0]>=from), before=all.filter(p=>p[0]<from).at(-1); if(before) pts.unshift([from,before[1]]); if(V>0) pts.push([now,V]);
+  if(pts.length<3&&!el.dataset.on){ el.style.display="none"; return; } el.style.display="block"; el.dataset.on=1;
+  el.title="Portfolio value, "+{"∞":"all time","30D":"last 30 days","7D":"last 7 days","1D":"last 24 hours"}[VR[vrange][0]]+" (tap to change)";
+  if(!el.onclick) el.onclick=()=>{ vrange=(vrange+1)%VR.length; store.set("vrange",vrange); renderValue(vLast); };
+  if(pts.length<2){ el.innerHTML=`<span class="vr${vrange?"":" inf"}">${VR[vrange][0]}</span>`; return; }
   const W=240, H=36, ys=pts.map(p=>p[1]), lo=Math.min(...ys), hi=Math.max(...ys), x0=pts[0][0], x1=pts.at(-1)[0];
   const X=t=>((t-x0)/(x1-x0||1)*W).toFixed(1), Y=v=>(hi===lo?H/2:2+(1-(v-lo)/(hi-lo))*(H-4)).toFixed(1);
   const d=pts.map((p,i)=>(i?"L":"M")+X(p[0])+" "+Y(p[1])).join("");
-  el.innerHTML=`<svg width="100%" height="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Portfolio value over time"><defs><linearGradient id="vg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2de2e6" stop-opacity=".35"/><stop offset="1" stop-color="#2de2e6" stop-opacity="0"/></linearGradient></defs><path d="${d}L${W} ${H}L0 ${H}Z" fill="url(#vg)"/><path d="${d}" fill="none" stroke="#2de2e6" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg>`; }
-let gsort=store.get("gsort",24);   // glance strip: sorted by the biggest move (up or down) over this many hours; tap a heading to change
+  el.innerHTML=`<svg width="100%" height="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="Portfolio value over time"><defs><linearGradient id="vg" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#2de2e6" stop-opacity=".35"/><stop offset="1" stop-color="#2de2e6" stop-opacity="0"/></linearGradient></defs><path d="${d}L${W} ${H}L0 ${H}Z" fill="url(#vg)"/><path d="${d}" fill="none" stroke="#2de2e6" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/></svg><span class="vr${vrange?"":" inf"}">${VR[vrange][0]}</span>`; }
+let gsort=store.get("gsort",24);   // glance strip: sorted from the biggest gain to the biggest loss over this many hours; tap a heading to change
 function renderGlance(){ const G=[["1h",1],["6h",6],["12h",12],["24h",24]], g=$("#glance"); if(!g) return;
   const rows=holdings.map(c=>{ const p=prices[key(c)]??c.px??(hist[key(c)]||[[0,0]]).at(-1)[1];
     return {c,r:Object.fromEntries(G.map(([,h])=>[h,periodReturn(c,h,p)]))}; });
-  rows.sort((a,b)=>Math.abs(b.r[gsort]??-1)-Math.abs(a.r[gsort]??-1));
+  rows.sort((a,b)=>(b.r[gsort]??-Infinity)-(a.r[gsort]??-Infinity));
   g.innerHTML=`<div class="gr gh"><b></b><i></i>${G.map(([l,h])=>`<span data-gs="${h}" class="${h===gsort?"on":""}">${l}${h===gsort?" ▾":""}</span>`).join("")}</div>`+rows.map(({c,r})=>
-    `<div class="gr"><b data-go="${esc(key(c))}">${esc(c.symbol||c.name)}</b>${spark(c)}${G.map(([l,h])=>{ const early=c.bought&&(Date.now()/1000-h*3600)<Date.parse(c.bought)/1000; return `<span class="${cls(r[h])}${h===gsort?" sel":""}">${fmtPct(r[h])}${early&&r[h]!=null?"*":""}</span>`; }).join("")}</div>`).join("");
+    `<div class="gr"><b data-go="${esc(key(c))}">${esc(c.symbol||c.name)}</b>${spark(c,gsort,r[gsort])}${G.map(([l,h])=>{ const early=c.bought&&(Date.now()/1000-h*3600)<Date.parse(c.bought)/1000; return `<span class="${cls(r[h])}${h===gsort?" sel":""}">${fmtPct(r[h])}${early&&r[h]!=null?"*":""}</span>`; }).join("")}</div>`).join("");
   g.querySelectorAll("[data-gs]").forEach(x=>x.onclick=()=>{ gsort=+x.dataset.gs; store.set("gsort",gsort); renderGlance(); });
   g.querySelectorAll("[data-go]").forEach(x=>x.onclick=()=>{ const card=document.querySelector(`#grid .card[data-k="${CSS.escape(x.dataset.go)}"]`); const ch=card&&card.querySelector(".chart"); if(ch) ch.scrollIntoView({behavior:"smooth",block:"center"}); }); }
 function renderPortfolio(){
@@ -357,7 +397,7 @@ async function scan(){
     const names=a=>a.map(c=>esc(c.symbol)).join(", ")||"none"; const added=out.filter(c=>!had.has(key(c))), gone=[...had.values()].filter(c=>!out.find(o=>key(o)===key(c)));
     const changed=out.filter(c=>had.has(key(c)) && (Math.abs(had.get(key(c)).qty-c.qty)>1e-6*Math.max(1,c.qty) || Math.abs(had.get(key(c)).cost-c.cost)>0.01));
     holdings=out; closed=j.closed.map(x=>({...x,name:x.symbol})); store.set("scan",{holdings,closed,at:j.scannedAt});
-    out.forEach(c=>{ prices[key(c)]=c.px; }); buildPortfolio(); holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); render(); AN=AN; buildAnalytics();
+    out.forEach(c=>{ prices[key(c)]=c.px; }); buildPortfolio(); holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); holdings.forEach(geckoMinutes); render(); AN=AN; buildAnalytics();
     $("#scanlog").innerHTML=`Scan done: <b>${added.length}</b> new (${names(added)}), <b>${gone.length}</b> removed (${names(gone)}), <b>${changed.length}</b> changed (${names(changed)}).`+(j.notes&&j.notes.length?`<br>`+j.notes.map(n=>esc(n.replace(/0x[0-9a-f]{40}/g,s=>s.slice(0,8)+"…"))).join("<br>"):"");
   }catch(e){ $("#scanlog").textContent="Scan failed: "+e.message; }
   b.disabled=false; b.textContent="Scan wallets";
@@ -394,7 +434,7 @@ const fobs=new IntersectionObserver(es=>es.forEach(e=>{ if(e.isIntersecting&&e.i
 const _bw=buildWatch, _bp=buildPortfolio, _bm=buildMarket; buildWatch=function(){ _bw(); watchFrames(); }; buildPortfolio=function(){ _bp(); watchFrames(); }; buildMarket=function(){ _bm(); watchFrames(); };
 function watchFrames(){ live=live.filter(f=>f.isConnected); document.querySelectorAll("iframe[data-src]").forEach(f=>{ if(!f.dataset.seen){ f.dataset.seen="1"; fobs.observe(f); } }); }
 buildPortfolio(); buildMarket(); renderMarket(); buildWatch(); render(); refresh(); setInterval(refresh,30000);
-holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); loadMarket(); setInterval(loadMarket,300000); loadWatch();
+holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); holdings.forEach(geckoMinutes); setInterval(()=>holdings.forEach(geckoMinutes),300000); loadMarket(); setInterval(loadMarket,300000); loadWatch();
 </script>
 </body>
 </html>

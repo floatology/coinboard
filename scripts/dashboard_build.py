@@ -125,13 +125,15 @@ def value_history(coins: list[dict], cfg: dict, now: float) -> list[list[float]]
             hist[-1] = point
         else:
             hist.append(point)
-    hist = [h for h in hist if h[0] >= now - 120 * 86400]
     try:
         VALUES.write_text(json.dumps(hist))
     except Exception as e:
         print(f"warning: could not save the value history ({e})")
-    step = max(1, len(hist) // 400)
-    return [h[:2] for h in hist[::step]] + ([hist[-1][:2]] if hist and (len(hist) - 1) % step else [])
+    # all of it for the page's timeframes (all time, 30, 7, 1 days): the last 7 days hourly, older points thinned to about 300
+    cut = now - 7 * 86400
+    old, recent = [h for h in hist if h[0] < cut], [h for h in hist if h[0] >= cut]
+    step = max(1, len(old) // 300)
+    return [h[:2] for h in old[::step] + recent]
 
 
 def _replay(cfg_file: Path, env: dict) -> dict | None:
