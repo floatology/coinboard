@@ -10,7 +10,7 @@ name: coinboard
 # (GitHub switches off scheduled workflows in public repositories after 60 days without repository activity).
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "7,27,47 * * * *"   # GitHub drops many scheduled runs when busy; three chances an hour (a newer run cancels an older one)
   workflow_dispatch:
 concurrency:
   group: coinboard
