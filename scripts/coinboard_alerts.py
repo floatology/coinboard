@@ -12,6 +12,9 @@
   whales     selling: a wallet holding at least 0.5% of supply (NET 0.1%) whose sales minus buys over 24 hours reach a
              quarter of its holding, 0.25% of supply and $10,000. Buying: a wallet whose buys minus sales over 24 hours
              reach 0.5% of supply and $10,000. Moves between wallets don't count. One alert per wallet and side per day.
+  team       wallets that got a whale-sized amount in a coin's first 30 seconds of trading (often the team or its
+             snipers), its creator, and wallets they have passed tokens to: any of them selling or moving 0.25% of supply
+             and $1,000 within 24 hours. One message per coin listing them; one alert per wallet per day.
   exit       selling a whole holding at once would move the price 10%, 20% or 35% (live swap quotes taken by the hourly
              build): once per mark, again after the impact has eased to under 70% of that mark. Holdings only.
 
@@ -43,6 +46,7 @@ import telegram_notify  # noqa: E402
 HELD = ROOT / "data/coinboard_held.json"
 FACTS = ROOT / "data/coinboard_facts.json"
 EXITS = ROOT / "data/coinboard_exit.json"
+TEAMS = ROOT / "data/coinboard_team.json"
 
 PRICE_WINDOWS = (6, 12, 24)  # hours
 PRICE_MOVE = 0.10            # a change of +-10% over a window alerts
@@ -60,6 +64,14 @@ WHALE_SUPPLY = 0.0025        # share of supply sold
 WHALE_BUY_SUPPLY = 0.005     # share of supply bought
 WHALE_USD = 10_000
 WHALE_QUIET = 24 * 3600
+
+# Launch wallets, measured on the 30 days to 17 Oct: FAZE's still held 49% of supply (5.6 alerts a week; 23h later the
+# price was down in 78% of cases, median -17%, against 58% and -5.6% for any hour), AF's 5% (4.9 a week, no edge),
+# WALLET's and NET's nothing.
+TEAM_LAUNCH = 30             # seconds after the first buy
+TEAM_MOVE = 0.0025           # share of supply a wallet sells or moves within 24 hours ...
+TEAM_USD = 1_000             # ... and its value
+TEAM_LINK = 0.2              # a plain transfer of this share of the whale threshold to a new wallet links that wallet
 
 EXIT_MARKS = (0.10, 0.20, 0.35)   # price impact of selling a whole holding at once
 
@@ -334,14 +346,18 @@ def tick(coins: list[dict], state: dict, now: float) -> list:
 
 
 # ---------- whales: selling or buying a lot within a day (hourly, from the archives just refreshed) ----------
+def rpc(chain: str, method: str, params: list):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    req = urllib.request.Request(RPC[chain], data=body, headers={"content-type": "application/json", "user-agent": "coinboard"})
+    with urllib.request.urlopen(req, timeout=20) as r:          # (Robinhood Chain's RPC refuses Python's default user agent)
+        return json.loads(r.read())["result"]
+
+
 def token_decimals(c: dict) -> int:
     e = load(ROOT / "data/tokens/tokens.json", {}).get(c["token"].lower()) if c["chain"] == "robinhood" else None
     if e and e.get("decimals") is not None:
         return int(e["decimals"])
-    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "eth_call", "params": [{"to": c["token"], "data": "0x313ce567"}, "latest"]})
-    req = urllib.request.Request(RPC[c["chain"]], data=body.encode(), headers={"content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as r:
-        return int(json.loads(r.read())["result"], 16)
+    return int(rpc(c["chain"], "eth_call", [{"to": c["token"], "data": "0x313ce567"}, "latest"]), 16)
 
 
 def watch_archived(held: list[dict]) -> list[dict]:
@@ -360,7 +376,7 @@ def watch_archived(held: list[dict]) -> list[dict]:
 def hourly(coins: list[dict], state: dict, now: float) -> list:
     import duckdb
     import dashboard_analytics as an           # the board's own whale threshold and list of pools / protocol addresses
-    out, con, sent = [], duckdb.connect(), state.get("sent", {})
+    out, con, sent, team = [], duckdb.connect(), state.get("sent", {}), load(TEAMS, {})
     try:
         watch = watch_archived(coins)
     except Exception as e:
@@ -388,6 +404,10 @@ def hourly(coins: list[dict], state: dict, now: float) -> list:
                                      or (q <= {-WHALE_BUY_SUPPLY * sup} and u <= {-WHALE_USD})""").fetchall()
         whale = WHALE_SIZE * cfg["th"][0] / 100 * sup
         b0 = con.execute(f"select min(block) from {L} where ts > {t0}").fetchone()[0]
+        try:
+            out += team_alerts(c, cfg, d, con, excl, sup, b0, team, sent, now)
+        except Exception as e:
+            print(f"warning: no team check for {'a watchlist coin' if c.get('watch') else c['name']} ({e})")
         for addr, q, u, last_trade in cands:
             side = "sell" if q > 0 else "buy"
             k = f"w:{key(c)}:{addr}:{side}"
@@ -406,7 +426,112 @@ def hourly(coins: list[dict], state: dict, now: float) -> list:
                 continue
             out.append((whale_message(c, side, q, u, sup, peak, start, bal, last_trade, addr), {k: {"t": now}},
                         {"t": now, "coin": c["name"], "side": side, "usd": abs(u), "watch": bool(c.get("watch"))}))
+    try:
+        TEAMS.write_text(json.dumps(team))
+    except Exception as e:
+        print(f"warning: could not save the team wallets ({e})")
     return out + exit_alerts(coins, state, now)
+
+
+# ---------- team: the launch wallets selling or moving ----------
+def is_wallet(chain: str, addr: str, known: dict) -> bool | None:
+    """A plain wallet, not a contract (a wallet delegating to code under EIP-7702 counts as a wallet); None when the
+    chain didn't answer (asked again next hour)."""
+    if addr not in known:
+        try:
+            code = rpc(chain, "eth_getCode", [addr, "latest"]) or "0x"
+        except Exception:
+            return None
+        known[addr] = code == "0x" or code.startswith("0xef0100")
+    return known[addr]
+
+
+def team_wallets(c: dict, d: Path, con, excl: set, dec: int, th: float, team: dict) -> dict | None:
+    """The coin's team as far as the chain shows: its creator, the wallets (not contracts) that got at least the whale
+    threshold in the first 30 seconds of trading, and wallets any of them later sent at least a fifth of that to in a
+    plain transfer. Worked out once, then extended each hour; kept in data/coinboard_team.json."""
+    T, ch = f"'{d}/transfers.parquet'", c["chain"]
+    e = team.get(key(c))
+    if e is None:
+        rows = con.execute(f"""select block, tx_hash, lower(src), lower(dst), cast(value as hugeint) / 1e{dec} from {T}
+                                order by block, log_index limit 20000""").fetchall()
+        if not rows or rows[0][2] != "0x" + "0" * 40:
+            return None                                  # the archive doesn't start at the coin's creation
+        b1 = next((r[0] for r in rows if r[2] in excl and r[2] != rows[0][2] and r[3] not in excl), None)
+        if b1 is None:
+            return None                                  # no trading yet
+        when = lambda b: int(rpc(ch, "eth_getBlockByNumber", [hex(b), False])["timestamp"], 16)
+        t1, lo, step = when(b1), b1, 64                  # the last block within 30 seconds of the first buy
+        while when(lo + step) <= t1 + TEAM_LAUNCH:
+            lo, step = lo + step, step * 2
+        hi = lo + step
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            lo, hi = (mid, hi) if when(mid) <= t1 + TEAM_LAUNCH else (lo, mid)
+        got: dict[str, float] = {}
+        for b, tx, s, dd, v in rows:
+            if b <= lo and dd not in excl:
+                got[dd] = got.get(dd, 0) + float(v)
+        known: dict[str, bool] = {}
+        launch = [a for a, q in got.items() if q >= th and is_wallet(ch, a, known) is not False]
+        if any(known.get(a) is None for a in launch):
+            return None                                  # the chain didn't answer: try again next hour
+        creator = rpc(ch, "eth_getTransactionReceipt", [rows[0][1]])["from"].lower()
+        e = team[key(c)] = {"creator": creator, "launch": launch, "linked": [], "block": lo, "wallet": known}
+    members = {e["creator"], *e["launch"], *e["linked"]}
+    for b, s, dd in con.execute(f"""select block, lower(src), lower(dst) from {T} where block > {e['block']}
+                                   and cast(value as hugeint) >= {TEAM_LINK * th} * 1e{dec} order by block, log_index""").fetchall():
+        if s in members and dd not in members and dd not in excl:
+            w = is_wallet(ch, dd, e["wallet"])
+            if w is None:
+                e["block"] = b - 1                       # carry on from this block next hour
+                break
+            if w:
+                members.add(dd)
+                e["linked"].append(dd)
+        e["block"] = b
+    return e
+
+
+def team_alerts(c: dict, cfg: dict, d: Path, con, excl: set, sup: float, b0: int, team: dict, sent: dict, now: float) -> list:
+    dec, th = int(cfg["dec"]), cfg["th"][0] / 100 * sup
+    e = team_wallets(c, d, con, excl, dec, th, team)
+    if not e:
+        return []
+    members = sorted({e["creator"], *e["launch"], *e["linked"]})
+    T, L, ins = f"'{d}/transfers.parquet'", f"'{d}/ledger.parquet'", ",".join(f"'{a}'" for a in members)
+    sells = {r[0] for r in con.execute(f"select tx_hash from {L} where side = 'sell' and block >= {b0}").fetchall()}
+    px = con.execute(f"select price_usd from {L} where usd >= 5 order by block desc, log_index desc limit 1").fetchone()
+    px = float(px[0]) if px else 0.0
+    flows: dict[str, list[float]] = {}                   # wallet -> [sold, moved] over the last 24 hours
+    for tx, s, dd, v in con.execute(f"""select tx_hash, lower(src), lower(dst), cast(value as hugeint) / 1e{dec} from {T}
+                                        where block >= {b0} and lower(src) in ({ins}) and lower(src) != lower(dst)""").fetchall():
+        sold = tx in sells or dd in excl or e["wallet"].get(dd) is False
+        flows.setdefault(s, [0.0, 0.0])[0 if sold else 1] += float(v)
+    fired = [w for w, (so, mv) in flows.items() if so + mv >= TEAM_MOVE * sup and (so + mv) * px >= TEAM_USD
+             and now - sent.get(f"t:{key(c)}:{w}", {}).get("t", -1e18) >= WHALE_QUIET]
+    if not fired:
+        return []
+    held = con.execute(f"""select sum(case when lower(dst) in ({ins}) then cast(value as hugeint) else 0 end)
+                                - sum(case when lower(src) in ({ins}) then cast(value as hugeint) else 0 end) from {T}
+                           where lower(src) in ({ins}) or lower(dst) in ({ins})""").fetchone()[0] or 0
+    sold, moved = sum(flows[w][0] for w in fired), sum(flows[w][1] for w in fired)
+    top = max(fired, key=lambda w: sum(flows[w]))
+    return [(team_message(c, len(fired), e["creator"] in fired, sold, moved, float(held) / 10 ** dec, sup, px, top),
+             {f"t:{key(c)}:{w}": {"t": now} for w in fired}, None)]
+
+
+def team_message(c: dict, n: int, creator: bool, sold: float, moved: float, held: float, sup: float, px: float, top: str) -> str:
+    ex = EXPLORER.get(c["chain"], "")
+    what = " and ".join(x for x in (f"sold {sold / sup:.2%} of the supply ({usd(sold * px)})" if sold else "",
+                                    f"moved {moved / sup:.2%} ({usd(moved * px)}) to other wallets" if moved else "") if x)
+    who = f"{n} of its launch wallets" if n > 1 else "One of its launch wallets"
+    return (f"{tag(c)}👀 <b>{esc(c['name'])} launch wallets {'selling' if sold >= moved else 'moving tokens'}: "
+            f"{(sold + moved) / sup:.2%} of supply in 24 hours</b>\n\n"
+            f"{who}{' (the creator among them)' if creator else ''} {what}.\n"
+            f"Launch wallets are the coin's creator, the wallets that bought big in its first 30 seconds of trading (often "
+            f"the team or its snipers) and wallets they have passed tokens to. Together they hold {max(held, 0) / sup:.1%} "
+            f"of the supply.\n\n" + (f"<a href=\"{ex}/address/{top}\">The biggest one</a> · " if ex else "") + chart(c))
 
 
 # ---------- exit liquidity: a whole holding no longer sells without moving the price a lot ----------
@@ -489,6 +614,8 @@ def demo(coins: list[dict], now: float) -> list[str]:
     c, sup, zero = coins[-1], 1e9, "0x" + "0" * 40
     out.append(whale_message(c, "sell", 0.31 * 0.0081 * sup, 12_400, sup, 0.0081 * sup, 0.0081 * sup, 0.69 * 0.0081 * sup, now - 1800, zero))
     out.append(whale_message(c, "buy", -0.0062 * sup, -15_800, sup, 0.0072 * sup, 0.001 * sup, 0.0072 * sup, now - 2700, zero))
+    mc = pairs[key(c)][0].get("fdv") or pairs[key(c)][0].get("marketCap") or 1e6
+    out.append(team_message(c, 3, False, 0.0121 * sup, 0.0042 * sup, 0.49 * sup, sup, mc / sup, zero))
     out.append(exit_message(c, {"impact": 0.14, "usd": 0.86 * c.get("qty", 0) * float(pairs[key(c)][0]["priceUsd"]), "sell5": 0.31}))
     out += [m for m, _, _ in summary(coins, pairs, {}, now, watch, force=True)]
     out.append(coinboard_tick.stale_text(2, "Refresh, analyse, build, deploy", "https://github.com/floatology/coinboard/actions"))
