@@ -164,8 +164,17 @@ def advance(cfg_file: Path, coins: list[dict], closed: list[dict], now: float, c
                if q is not None and abs(rq.get(k, 0) - q) > max(0.01, 0.005 * q)]
         if bad:
             print("warning: replay disagrees with on-chain balances (" + "; ".join(bad) + ")")
-        fixed = [n for n in res.get("notes", []) if "differs from the replay" in n]
-        if fixed:                                    # the replay itself missed something: do not trust its costs
+        held = {(c["chain"], c["token"].lower()) for c in coins}
+        fixed, dust = [], []
+        for h in res["holdings"] + res["closed"]:
+            if h.get("corrected"):                   # the replay missed transfers of this token
+                was = h["corrected"]
+                msg = f"{h['chain']}: {h.get('symbol', '?')} chain {h.get('qty', 0):,.6g} vs replay {was.get('qty', 0):,.6g}"
+                money = (h["chain"], h["token"].lower()) in held or was.get("cost", 0) > 0 or h.get("soldQty", 0) > 0
+                (fixed if money else dust).append(msg)
+        if dust:                                     # free tokens nobody paid for (airdrops): no cost to get wrong
+            print("replay: corrected free tokens (" + "; ".join(dust) + ")")
+        if fixed:                                    # a coin with money in it: do not trust the replay's costs
             print("warning: replay needed balance corrections (" + "; ".join(fixed) + ")")
         return not bad and not fixed
 

@@ -7,13 +7,18 @@ const lc = s => (s || "").toLowerCase();
 
 async function rpc(url, method, params, tries = 5) {
   let err;
-  for (let i = 0; i < tries; i++) {
+  for (let i = 0, busy = 0; i < tries; i++) {
     try {
       const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+      if (r.status === 429) throw Object.assign(new Error("rate limited (HTTP 429)"), { busy: true });
       const j = await r.json();
-      if (j.error) throw new Error(JSON.stringify(j.error).slice(0, 200));
+      if (j.error) throw Object.assign(new Error(JSON.stringify(j.error).slice(0, 200)), { busy: /rate.?limit|too many requests|throttl/i.test(j.error.message || "") });
       return j.result;
-    } catch (e) { err = e; await new Promise(r => setTimeout(r, 600 * (i + 1))); }
+    } catch (e) {
+      err = e;
+      if (e.busy && busy++ < 6) i--;   // rate limited: wait longer (2, 4, 8, 16 s ...) without using up a try
+      await new Promise(r => setTimeout(r, e.busy ? 1000 * 2 ** Math.min(busy, 4) + Math.random() * 500 : 600 * (i + 1)));
+    }
   }
   throw err;
 }
@@ -22,15 +27,16 @@ async function pool(items, n, fn) {
   await Promise.all(Array.from({ length: n }, async () => { while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); } }));
   return out;
 }
-async function logs(url, flt, a, b, maxSpan) {
-  // split the range; halve when the node refuses
-  const spans = [];
-  for (let s = a; s <= b; s += maxSpan) spans.push([s, Math.min(s + maxSpan - 1, b)]);
-  const one = async ([x, y]) => {
-    try { return await rpc(url, "eth_getLogs", [{ ...flt, fromBlock: "0x" + x.toString(16), toBlock: "0x" + y.toString(16) }], 2); }
-    catch (e) { if (y - x < 50) throw e; const m = Math.floor((x + y) / 2); return [...(await one([x, m])), ...(await one([m + 1, y]))]; }
+// every filter over every span of the range, through one pool so a busy node is not flooded; a span the node refuses is
+// halved (never when the refusal is a rate limit: splitting would only add requests)
+async function logs(url, flts, a, b, maxSpan) {
+  const jobs = [];
+  for (const f of flts) for (let s = a; s <= b; s += maxSpan) jobs.push([f, s, Math.min(s + maxSpan - 1, b)]);
+  const one = async ([f, x, y]) => {
+    try { return await rpc(url, "eth_getLogs", [{ ...f, fromBlock: "0x" + x.toString(16), toBlock: "0x" + y.toString(16) }], 2); }
+    catch (e) { if (e.busy || y - x < 50) throw e; const m = Math.floor((x + y) / 2); return [...(await one([f, x, m])), ...(await one([f, m + 1, y]))]; }
   };
-  return (await pool(spans, 8, one)).flat();
+  return (await pool(jobs, 6, one)).flat();
 }
 const hex = x => parseInt(x, 16);
 // decimals; null when it cannot be read (never guess: a wrong guess would scale every amount of that token)
@@ -57,7 +63,7 @@ async function scanChain(key, ch, notes) {
   if (head >= from) {
     const flt = [];
     for (const w of wallets) { flt.push({ topics: [TRANSFER, null, pad(w)] }); flt.push({ topics: [TRANSFER, pad(w)] }); }
-    const got = (await Promise.all(flt.map(f => logs(url, f, from, head, ch.maxSpan)))).flat();
+    const got = await logs(url, flt, from, head, ch.maxSpan);
     const hashes = [...new Set(got.map(l => l.transactionHash))];
     const receipts = await pool(hashes, 6, async h => {   // a missing receipt would silently drop a trade: retry, then fail the scan
       for (let i = 0; i < 5; i++) { const rc = await rpc(url, "eth_getTransactionReceipt", [h]); if (rc) return rc; await new Promise(r => setTimeout(r, 800 * (i + 1))); }
@@ -124,6 +130,7 @@ async function scanChain(key, ch, notes) {
       if (again == null || Math.abs(Number(again) / 10 ** h.dec - oc) > tol(oc)) { notes.push(`${key}: ${h.symbol} balance reads disagree; kept the replay`); return; }
       // fewer on chain: tokens left unseen, cost reduced at the average; more on chain: arrived unseen, price unknown, cost unchanged
       notes.push(`${key}: ${h.symbol} balance on chain ${oc.toPrecision(8)} differs from the replay ${h.qty.toPrecision(8)}; using the chain` + (oc > h.qty ? " (extra tokens counted at no cost)" : ""));
+      h.corrected = { qty: h.qty, cost: h.cost };   // what the replay had, for callers deciding whether to trust it
       if (oc < h.qty && h.qty > 0) h.cost *= oc / h.qty;
       h.qty = oc;
     }
