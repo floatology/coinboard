@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Avava Labs</title>
+<link rel="manifest" href="manifest.json" crossorigin="use-credentials">
+<meta name="theme-color" content="#26084d">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%230d0221'/%3E%3Cpath d='M12 44 24 30l9 7 19-21' fill='none' stroke='%232de2e6' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@600;700;800&family=Exo+2:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -497,6 +500,11 @@ const _bw=buildWatch, _bp=buildPortfolio, _bm=buildMarket; buildWatch=function()
 function watchFrames(){ live=live.filter(f=>f.isConnected); document.querySelectorAll("iframe[data-src]").forEach(f=>{ if(!f.dataset.seen){ f.dataset.seen="1"; fobs.observe(f); } }); }
 buildPortfolio(); buildMarket(); renderMarket(); buildWatch(); render(); refresh(); setInterval(refresh,30000);
 holdings.forEach(c=>{ if(!hist[key(c)]) geckoHist(c); }); holdings.forEach(geckoMinutes); setInterval(()=>holdings.forEach(geckoMinutes),300000); loadMarket(); setInterval(loadMarket,300000); loadWatch(); loadLevels();
+// installed as an app (manifest.json, sw.js): the app can sit in the background for hours, so coming back to it after
+// 30 minutes or more reloads it for the latest hourly build (prices stay live either way)
+if("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
+const loadedAt=Date.now();
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden&&Date.now()-loadedAt>1800000) location.reload(); });
 </script>
 </body>
 </html>

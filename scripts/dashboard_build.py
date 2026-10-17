@@ -362,6 +362,8 @@ def main() -> int:
         print(f"warning: could not save the shown holdings ({e})")
     for f in ("scan.js", "refresh.js", "watch.js", "levels.js"):
         shutil.copy(ROOT / "dashboard/api" / f, out / "api" / f)
+    for f in (ROOT / "dashboard/app").iterdir():     # installable as a phone app: manifest, icons, service worker
+        shutil.copy(f, out / f.name)
     (out / "vercel.json").write_text(json.dumps({
         "functions": {"api/scan.js": {"maxDuration": 60}, "api/refresh.js": {"maxDuration": 15}, "api/watch.js": {"maxDuration": 15}, "api/levels.js": {"maxDuration": 15}},
         "headers": [{"source": "/(.*)", "headers": [{"key": "X-Robots-Tag", "value": "noindex, nofollow"}, {"key": "Cache-Control", "value": "no-store"}]}]}))
