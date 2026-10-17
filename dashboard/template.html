@@ -129,6 +129,10 @@ const TZ = "Asia/Bangkok";
 const fmtWhen = t => new Date(t*1000).toLocaleString("en-GB",{timeZone:TZ,day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"})+" Bangkok time";
 const fmtPct = v => v==null||!isFinite(v) ? "n/a" : (v>=0?"+":"−") + Math.abs(v*100).toFixed(1) + "%";
 const cls = v => v==null ? "" : (v>=0 ? "pos" : "neg");
+// selling the whole holding at once: the price impact from live swap quotes at the last build (shown while the holding
+// is within 10% of what was quoted), and the share that sells before a 5% move when that is less than all of it
+const exitNote = c => { const x=c.exit; if(!x||!c.qty||Math.abs(x.qty/c.qty-1)>0.1) return "";
+  return `<span title="From live swap quotes at ${fmtWhen(x.t)}">Sell all now <b>${x.impact<0.001?"under 0.1%":"−"+(x.impact*100).toFixed(1)+"%"}</b> impact${x.sell5<1?` · 5% after <b>${Math.round(x.sell5*100)}%</b> of it`:""}</span>`; };
 const fmtMcap = v => v>=1e9 ? "$"+(v/1e9).toFixed(1)+"B" : v>=1e6 ? "$"+(v/1e6).toFixed(1)+"M" : v>=1e3 ? "$"+Math.round(v/1e3)+"k" : "$"+Math.round(v);
 const short = v => v>=1e6 ? (v/1e6).toFixed(1)+"M" : v>=1e3 ? (v/1e3).toFixed(1)+"k" : v.toFixed(0);
 function fmtPrice(p){ if(p==null||!isFinite(p)) return "n/a"; if(p>=100) return "$"+p.toFixed(2); if(p>=1) return "$"+p.toFixed(3); if(p>=0.01) return "$"+p.toFixed(4); const e=Math.floor(Math.log10(p)); return "$"+p.toFixed(Math.min(10,2-e+2)); }
@@ -138,7 +142,7 @@ const store = {get(k,d){try{return JSON.parse(localStorage.getItem(k))??d}catch{
 /* ---------- state ---------- */
 let holdings = DATA.coins.map(c=>({...c}));
 let closed = DATA.closed.slice();
-const saved = store.get("scan",null); if(saved && saved.holdings && saved.at > DATA.built){ const b=new Map(DATA.coins.map(c=>[c.chain+":"+c.token.toLowerCase(),c])); holdings = saved.holdings.map(h=>{ const d=b.get(h.chain+":"+h.token.toLowerCase()); return d?{...h,hist:d.hist,pair:d.pair,bought:d.bought??h.bought}:h; }); closed = saved.closed; }
+const saved = store.get("scan",null); if(saved && saved.holdings && saved.at > DATA.built){ const b=new Map(DATA.coins.map(c=>[c.chain+":"+c.token.toLowerCase(),c])); holdings = saved.holdings.map(h=>{ const d=b.get(h.chain+":"+h.token.toLowerCase()); return d?{...h,hist:d.hist,pair:d.pair,bought:d.bought??h.bought,exit:d.exit}:h; }); closed = saved.closed; }
 const prices = {}, hist = {}, info = {};      // by token key
 const key = c => c.chain+":"+c.token.toLowerCase();
 holdings.forEach(c=>{ if(c.hist) hist[key(c)] = c.hist; });
@@ -294,7 +298,7 @@ function renderPortfolio(){
     const val=p*c.qty, pl=val-c.cost; V+=val; C+=c.cost;
     q("val").textContent=fmtUSD(val); q("cost").textContent=fmtUSD(c.cost); q("pl").textContent=(pl>=0?"+":"−")+fmtUSD(Math.abs(pl)); q("pl").className=cls(pl); q("ret").textContent=fmtPct(val/c.cost-1);
     const avgb=c.cost/c.qty, avgs=c.soldQty>0?c.soldProceeds/c.soldQty:null;
-    q("avg").innerHTML=`<span>Avg buy <b>${fmtPrice(avgb)}</b></span>${avgs?`<span>Avg sell <b>${fmtPrice(avgs)}</b></span><span>Realised <b class="${cls(c.realised)}">${c.realised>=0?"+":"−"}${fmtUSD(Math.abs(c.realised))}</b></span>`:""}<span>Holding <b>${c.qty.toLocaleString("en-US",{maximumFractionDigits:2})}</b></span>`;
+    q("avg").innerHTML=`<span>Avg buy <b>${fmtPrice(avgb)}</b></span>${avgs?`<span>Avg sell <b>${fmtPrice(avgs)}</b></span><span>Realised <b class="${cls(c.realised)}">${c.realised>=0?"+":"−"}${fmtUSD(Math.abs(c.realised))}</b></span>`:""}<span>Holding <b>${c.qty.toLocaleString("en-US",{maximumFractionDigits:2})}</b></span>${exitNote(c)}`;
   });
   renderGlance(); renderValue(V);
   totV=V; totC=C; renderTotal();
@@ -410,7 +414,7 @@ async function scan(){
       if(pair===undefined && !old) continue;                              // new coin and no answer: show it after the next scan
       if(pair===null || (pair && h.qty*parseFloat(pair.priceUsd)<0.5)) continue;   // unlisted or dust: hidden
       const px=pair?parseFloat(pair.priceUsd):(prices[k]??old.px);         // a coin already held is never dropped for a failed lookup
-      out.push({name:h.symbol,symbol:h.symbol,chain:h.chain,token:h.token,qty:h.qty,cost:h.cost,soldQty:h.soldQty,soldProceeds:h.soldProceeds,realised:h.realised,pair:old?.pair||pair.pairAddress,bought:old?.bought,hist:old?.hist,px});
+      out.push({name:h.symbol,symbol:h.symbol,chain:h.chain,token:h.token,qty:h.qty,cost:h.cost,soldQty:h.soldQty,soldProceeds:h.soldProceeds,realised:h.realised,pair:old?.pair||pair.pairAddress,bought:old?.bought,hist:old?.hist,exit:old?.exit,px});
     }
     const ord=[...had.keys()]; out.sort((a,b)=>{ const i=ord.indexOf(key(a)), j=ord.indexOf(key(b)); return (i<0?99:i)-(j<0?99:j); });
     const names=a=>a.map(c=>esc(c.symbol)).join(", ")||"none"; const added=out.filter(c=>!had.has(key(c))), gone=[...had.values()].filter(c=>!out.find(o=>key(o)===key(c)));

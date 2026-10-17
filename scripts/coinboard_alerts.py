@@ -2,7 +2,7 @@
 """Coin Board's Telegram alerts.
 
     coinboard_alerts.py tick     # every 5 minutes (the alerts workflow): price moves, liquidity pulls, the daily summary
-    coinboard_alerts.py hourly   # every hour, after the archive refresh: whales selling or buying
+    coinboard_alerts.py hourly   # every hour, after the archive refresh: whales selling or buying, exit liquidity
 
   price      a held coin moving 10% or more over 6, 12 or 24 hours: one message per coin with all three changes. A window
              alerts again only after its own length, or 10 points further the same way, or when the move turns.
@@ -12,6 +12,8 @@
   whales     selling: a wallet holding at least 0.5% of supply (NET 0.1%) whose sales minus buys over 24 hours reach a
              quarter of its holding, 0.25% of supply and $10,000. Buying: a wallet whose buys minus sales over 24 hours
              reach 0.5% of supply and $10,000. Moves between wallets don't count. One alert per wallet and side per day.
+  exit       selling a whole holding at once would move the price 10%, 20% or 35% (live swap quotes taken by the hourly
+             build): once per mark, again after the impact has eased to under 70% of that mark. Holdings only.
 
 The page's watchlist gets every alert too, each message starting "Watchlist" (whales only for coins on Robinhood Chain
 and Arc, whose trades the hourly update archives). It is read from the page's database when the GitHub secrets
@@ -40,6 +42,7 @@ import telegram_notify  # noqa: E402
 
 HELD = ROOT / "data/coinboard_held.json"
 FACTS = ROOT / "data/coinboard_facts.json"
+EXITS = ROOT / "data/coinboard_exit.json"
 
 PRICE_WINDOWS = (6, 12, 24)  # hours
 PRICE_MOVE = 0.10            # a change of +-10% over a window alerts
@@ -57,6 +60,8 @@ WHALE_SUPPLY = 0.0025        # share of supply sold
 WHALE_BUY_SUPPLY = 0.005     # share of supply bought
 WHALE_USD = 10_000
 WHALE_QUIET = 24 * 3600
+
+EXIT_MARKS = (0.10, 0.20, 0.35)   # price impact of selling a whole holding at once
 
 SUMMARY_HOUR = 8             # the daily summary at 08:00 ...
 TZ_HOURS = 7                 # ... Bangkok time (UTC+7, no daylight saving), the time every alert shows
@@ -401,7 +406,32 @@ def hourly(coins: list[dict], state: dict, now: float) -> list:
                 continue
             out.append((whale_message(c, side, q, u, sup, peak, start, bal, last_trade, addr), {k: {"t": now}},
                         {"t": now, "coin": c["name"], "side": side, "usd": abs(u), "watch": bool(c.get("watch"))}))
+    return out + exit_alerts(coins, state, now)
+
+
+# ---------- exit liquidity: a whole holding no longer sells without moving the price a lot ----------
+def exit_alerts(coins: list[dict], state: dict, now: float) -> list:
+    ex, out, sent = load(EXITS, {}), [], state.setdefault("sent", {})
+    for c in coins:
+        x, k = ex.get(key(c)), f"x:{key(c)}"
+        if not x or now - x["t"] > 2 * 3600:          # quotes from this hour's build only
+            continue
+        last = sent.get(k, {}).get("level", 0)
+        eased = max((m for m in EXIT_MARKS if x["impact"] >= 0.7 * m), default=0)
+        if eased < last:                              # eased off: the mark can alert again
+            sent[k] = {"t": now, "level": eased}
+            last = eased
+        mark = max((m for m in EXIT_MARKS if x["impact"] >= m), default=0)
+        if mark > last:
+            out.append((exit_message(c, x), {k: {"t": now, "level": mark}}, None))
     return out
+
+
+def exit_message(c: dict, x: dict) -> str:
+    part = (f"About {x['sell5']:.0%} of it sells before the price moves 5%." if x["sell5"] < 1 else "")
+    return (f"🚪 <b>{esc(c['name'])}: selling all of it now would move the price {pct(-x['impact'])}</b>\n\n"
+            f"Your whole holding would fetch about {usd(x['usd'])} in one sale, {x['impact']:.0%} under today's price. {part}\n"
+            "The coin's liquidity is thin for the size of your holding: a sale would need to be split up.\n\n" + chart(c))
 
 
 def whale_message(c: dict, side: str, q: float, u: float, sup: float, peak: float, start: float, bal: float,
@@ -459,6 +489,7 @@ def demo(coins: list[dict], now: float) -> list[str]:
     c, sup, zero = coins[-1], 1e9, "0x" + "0" * 40
     out.append(whale_message(c, "sell", 0.31 * 0.0081 * sup, 12_400, sup, 0.0081 * sup, 0.0081 * sup, 0.69 * 0.0081 * sup, now - 1800, zero))
     out.append(whale_message(c, "buy", -0.0062 * sup, -15_800, sup, 0.0072 * sup, 0.001 * sup, 0.0072 * sup, now - 2700, zero))
+    out.append(exit_message(c, {"impact": 0.14, "usd": 0.86 * c.get("qty", 0) * float(pairs[key(c)][0]["priceUsd"]), "sell5": 0.31}))
     out += [m for m, _, _ in summary(coins, pairs, {}, now, watch, force=True)]
     out.append(coinboard_tick.stale_text(2, "Refresh, analyse, build, deploy", "https://github.com/floatology/coinboard/actions"))
     out.append(coinboard_tick.CRON_DOWN)

@@ -19,12 +19,16 @@ import re
 import shutil
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import duckdb
 import httpx
 
+from exit_liquidity import exit_liquidity
+
 ROOT = Path(__file__).resolve().parents[1]
+EXITS = ROOT / "data/coinboard_exit.json"
 PUBLIC_LOG = os.environ.get("GITHUB_ACTIONS") == "true"     # the coinboard repo is public, and so are its run logs
 
 
@@ -145,6 +149,38 @@ def value_history(coins: list[dict], cfg: dict, now: float) -> list[list[float]]
     old, recent = [h for h in hist if h[0] < cut], [h for h in hist if h[0] >= cut]
     step = max(1, len(old) // 300)
     return [h[:2] for h in old[::step] + recent]
+
+
+def exits(coins: list[dict], now: float) -> None:
+    """How much each holding could be sold for right now (live swap quotes, scripts/exit_liquidity.py), as c["exit"] for
+    the cards and in data/coinboard_exit.json for the hourly alert. A coin whose quotes fail keeps its last reading for
+    up to 6 hours."""
+    try:
+        old = json.loads(EXITS.read_text())
+    except Exception:
+        old = {}
+
+    def one(c: dict) -> dict | None:
+        try:
+            return exit_liquidity(c["chain"], c["token"], c["qty"], c.get("dec", 18))
+        except Exception:
+            return None
+    with ThreadPoolExecutor(4) as ex:
+        got = list(ex.map(one, coins))
+    new = {}
+    for c, x in zip(coins, got):
+        k = f"{c['chain']}:{c['token'].lower()}"
+        if x:
+            x.update(qty=c["qty"], t=int(now))
+        elif k in old and now - old[k]["t"] < 6 * 3600:
+            x = old[k]
+        if x:
+            new[k] = c["exit"] = x
+    print(f"exit liquidity: {sum(1 for x in got if x)} of {len(coins)} holdings quoted")
+    try:
+        EXITS.write_text(json.dumps(new))
+    except Exception as e:
+        print(f"warning: could not save the exit quotes ({e})")
 
 
 def _replay(cfg_file: Path, env: dict) -> dict | None:
@@ -314,6 +350,7 @@ def main() -> int:
     (out / "api/_config.json").write_text(json.dumps(api))
     coins, closed = advance(out / "api/_config.json", coins, closed, now, chain_qty, hashlib.sha256(Path(a.positions).read_bytes()).hexdigest())
     vhist = value_history(coins, cfg, now)
+    exits(coins, now)
     try:
         (ROOT / "data/coinboard_shown.json").write_text(json.dumps([{"name": c["name"], "chain": c["chain"], "token": c["token"], "dec": c.get("dec", 18)} for c in coins]))
         # for the alerts (the 5-minute check gets it through its own small cache): what is held, its chart pair, quantity,
