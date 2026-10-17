@@ -281,7 +281,7 @@ def summary(coins: list[dict], pairs: dict, state: dict, now: float, watch: list
         named = ", ".join(esc(x["coin"]) + (" (watchlist)" if x.get("watch") else "") + " " + usd(x["usd"]) for x in xs[:4])
         return f"{len(xs)} {side}{'s' if len(xs) != 1 else ''}" + (f" ({named})" if xs else "")
     hold = facts.get("holders", {})
-    holders = " · ".join(f"{esc(n)} {'+' if v[0] >= v[1] else '−'}{abs(v[0] / v[1] - 1) * 100:.2f}%" for n, v in hold.items() if len(v) == 2 and v[1])
+    holders = "\n".join(f"{esc(n)} {'+' if v[0] >= v[1] else '−'}{abs(v[0] / v[1] - 1) * 100:.2f}%" for n, v in hold.items() if len(v) == 2 and v[1])
     move = max(rows, key=lambda r: abs(r[2] or 0))
     wrows = []
     for c in watch:
@@ -297,7 +297,7 @@ def summary(coins: list[dict], pairs: dict, state: dict, now: float, watch: list
              f"Biggest move: {esc(move[0])} {pct(move[2])}\n"
              + (f"\nWatchlist, 24h:\n{wtable}\n\n" if wrows else "") +
              f"Whale alerts, 24h: {whales('sell')} · {whales('buy')}"
-             + (f"\nHolders, 24h: {holders}" if holders else ""),
+             + (f"\n\nHolders, 24h:\n{holders}" if holders else ""),
              {"summary": {"t": now, "day": day}}, None)]
 
 
