@@ -1,20 +1,19 @@
 name: coinboard
 # Hourly: refresh the trade archives, rebuild the analytics and the page, deploy to the private Vercel project.
-# Also runs when you press "Refresh analytics" on the page (workflow_dispatch). Needs these repository secrets:
+# Started by the "alerts" workflow's 5-minute tick when an update is due (scripts/coinboard_tick.py), and by
+# "Refresh analytics" on the page. Needs these repository secrets:
 #   POSITIONS_JSON  the owner's positions file (costs and quantities; never committed)
 #   VERCEL_TOKEN    Vercel token that can deploy the coinboard project
 #   VERCEL_PROJECT  the Vercel project name
 #   SEED_REPO, SEED_TOKEN  optional: a fallback source of starting archives if both the cache and the backup release are lost
 # The archives live in the Actions cache between runs; a copy is uploaded daily to the "archive-backup" release (public
-# chain data only; the replay state with costs is left out). A small commit every ~40 days keeps the schedule enabled
-# (GitHub switches off scheduled workflows in public repositories after 60 days without repository activity).
+# chain data only; the replay state with costs is left out). A small commit every ~40 days keeps the alerts fallback
+# schedule enabled (GitHub switches off scheduled workflows in public repositories after 60 days without activity).
 on:
-  schedule:
-    - cron: "7,27,47 * * * *"   # GitHub drops many scheduled runs when busy; three chances an hour (a newer run cancels an older one)
   workflow_dispatch:
 concurrency:
   group: coinboard
-  cancel-in-progress: true    # a newer run (new code, the hourly schedule or the page button) replaces an older one
+  cancel-in-progress: true    # a newer run (the tick or the page button) replaces an older one
 permissions:
   contents: write      # the keep-alive commit and the archive backup release
 jobs:
